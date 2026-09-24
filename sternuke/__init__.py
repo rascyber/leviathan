@@ -31,13 +31,36 @@ from .ai_agent import (
     AIAgent, ContractBlueprint, FunctionInfo, LocalModelClient, ModelConfig,
     RustAnalyzer, SolidityAnalyzer, StateVariable, WebContextBuilder,
 )
+from .state_engine import (
+    ChainResult, DependencyGraph, Extractor, InteractionStep, SelfCorrectionLoop,
+    SessionState, StatefulChainEngine, StepResult,
+)
+from .memory import (
+    HashingEmbedder, MemoryRecord, Recall, VectorMemory, build_default_memory,
+    cosine,
+)
+from .cognitive import (
+    BusinessLogicMutator, CallGraphNode, CrossContractAnalyzer, ExternalCall,
+)
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
+    # engine
     "AsyncHttpClient", "Finding", "HttpResponse", "Matcher", "RepoCrawler",
     "Rule", "RuleEngine", "ScanPolicy", "SourceFile", "WebScanner",
+    # ai_agent
     "AIAgent", "ContractBlueprint", "FunctionInfo", "LocalModelClient",
     "ModelConfig", "RustAnalyzer", "SolidityAnalyzer", "StateVariable",
-    "WebContextBuilder", "__version__",
+    "WebContextBuilder",
+    # state_engine
+    "ChainResult", "DependencyGraph", "Extractor", "InteractionStep",
+    "SelfCorrectionLoop", "SessionState", "StatefulChainEngine", "StepResult",
+    # memory
+    "HashingEmbedder", "MemoryRecord", "Recall", "VectorMemory",
+    "build_default_memory", "cosine",
+    # cognitive
+    "BusinessLogicMutator", "CallGraphNode", "CrossContractAnalyzer",
+    "ExternalCall",
+    "__version__",
 ]

@@ -29,11 +29,14 @@ import json
 import os
 import sys
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from .engine import (
     Finding, RepoCrawler, RuleEngine, ScanPolicy, WebScanner,
 )
 from .ai_agent import AIAgent, LocalModelClient, ModelConfig
+from .cognitive import CrossContractAnalyzer
+from .memory import build_default_memory
 
 try:
     import click
@@ -75,6 +78,9 @@ async def run_assessment(
     rule_engine = RuleEngine(logger=log)
     model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
     agent = AIAgent(model_client, logger=log)
+    # Local case-based memory: recalled cases steer, but never dictate, testing.
+    memory = build_default_memory(
+        path=os.path.join(output_dir, "memory.json"), logger=log)
 
     findings: List[Finding] = []
 
@@ -85,6 +91,19 @@ async def run_assessment(
         blueprints = agent.build_blueprints(sources)
         _dump_json(os.path.join(output_dir, "blueprint.json"),
                    [bp.to_dict() for bp in blueprints])
+
+        # Cross-contract interaction & reentrancy mapping (static analysis).
+        xcontract = CrossContractAnalyzer(logger=log)
+        call_graph: dict = {}
+        for sf in sources:
+            nodes = xcontract.analyze(sf.path, sf.content, sf.language)
+            call_graph.update(xcontract.call_graph_summary(nodes))
+            for f in xcontract.findings(nodes):
+                findings.append(f)
+                memory.remember_finding(
+                    title=f.name, text=f.description, domain="blockchain",
+                    tech=f.tags, severity=f.severity)
+        _dump_json(os.path.join(output_dir, "call_graph.json"), call_graph)
         if use_ai:
             rule_file = await agent.synthesize_from_blueprints(
                 blueprints, output_dir, fmt=rule_format)
@@ -103,6 +122,11 @@ async def run_assessment(
             ))
 
     elif mode == "web":
+        # Strategic intuition: recall weakness classes relevant to the target
+        # host/profile so the operator (and AI agent) knows what to prioritise.
+        profile = [urlparse(target).hostname or target, "web", "api"]
+        for recall in memory.strategic_intuition(profile, domain="web", top_k=3):
+            log(f"[intuition] {recall.score:.2f} :: {recall.record.title}")
         if rules_path:
             _load_rules(rule_engine, rules_path, log)
         if use_ai:
@@ -120,8 +144,67 @@ async def run_assessment(
     else:
         raise ValueError(f"Unknown mode: {mode!r} (expected 'web' or 'blockchain')")
 
+    memory.save()
     _write_report(findings, output_dir)
     return findings
+
+
+async def run_business_logic_chain(
+    *,
+    target: str,
+    path: str,
+    params: dict,
+    output_dir: str,
+    model: str,
+    base_url: str,
+    concurrency: int,
+    rps: float,
+    verbose: bool,
+) -> List[Finding]:
+    """Plan and execute a stateful business-logic test chain against one endpoint.
+
+    Exercises the cognitive planner, the dependency-ordered stateful engine and
+    the bounded self-correction loop together. Intended for authorised testing
+    of an endpoint you control.
+    """
+    from .engine import AsyncHttpClient
+    from .state_engine import StatefulChainEngine
+    from .cognitive import BusinessLogicMutator
+
+    log = _console_logger(verbose)
+    os.makedirs(output_dir, exist_ok=True)
+    policy = ScanPolicy(max_concurrency=concurrency, requests_per_second=rps)
+    model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
+    memory = build_default_memory(os.path.join(output_dir, "memory.json"), logger=log)
+
+    planner = BusinessLogicMutator(logger=log)
+    steps = planner.plan(path, params, method="POST")
+    engine = StatefulChainEngine(policy, model_client, logger=log)
+
+    async with AsyncHttpClient(policy, log) as client:
+        result = await engine.run_chain(target, steps, client,
+                                        name="business-logic", memory=memory)
+    memory.save()
+    _dump_json(os.path.join(output_dir, "chain-steps.json"),
+               [s.__dict__ for s in result.steps])
+    _write_report(result.findings, output_dir)
+    return result.findings
+
+
+def run_intel_query(query: str, output_dir: str, domain: Optional[str],
+                    top_k: int) -> None:
+    """Print the memory's strategic recall for a query (case-based reasoning)."""
+    memory = build_default_memory(os.path.join(output_dir, "memory.json"))
+    recalls = memory.query(query, top_k=top_k, domain=domain)
+    print(f"\n=== strategic recall for: {query!r} ===")
+    if not recalls:
+        print("No relevant cases.")
+        return
+    for r in recalls:
+        print(f"  [{r.score:.2f}] ({r.record.domain}/{r.record.severity}) "
+              f"{r.record.title}")
+        if r.record.strategy:
+            print(f"          strategy: {r.record.strategy}")
 
 
 # ----------------------------------------------------------------------------
@@ -203,6 +286,38 @@ if click is not None:
         ))
         print_summary(findings)
 
+    @cli.command("chain")
+    @click.option("--target", required=True, help="Base URL of the endpoint under test.")
+    @click.option("--path", default="/api/v1/cart/checkout", show_default=True,
+                  help="Endpoint path to probe for business-logic flaws.")
+    @click.option("--param", "params", multiple=True, metavar="KEY=VALUE",
+                  help="Baseline business parameter (repeatable), e.g. --param quantity=1.")
+    @click.option("--model", default="deepseek-coder", show_default=True)
+    @click.option("--base-url", default="http://localhost:11434/v1", show_default=True)
+    @click.option("--output", "output_dir", default="./sternuke-out", show_default=True)
+    @click.option("--concurrency", default=10, show_default=True)
+    @click.option("--rps", default=15.0, show_default=True)
+    @click.option("-v", "--verbose", is_flag=True, default=False)
+    def chain_cmd(target, path, params, model, base_url, output_dir,
+                  concurrency, rps, verbose):
+        """Run a stateful business-logic test chain against one endpoint."""
+        parsed = dict(p.split("=", 1) for p in params if "=" in p) or {"quantity": "1"}
+        findings = asyncio.run(run_business_logic_chain(
+            target=target, path=path, params=parsed, output_dir=output_dir,
+            model=model, base_url=base_url, concurrency=concurrency, rps=rps,
+            verbose=verbose,
+        ))
+        print_summary(findings)
+
+    @cli.command("intel")
+    @click.argument("query")
+    @click.option("--domain", type=click.Choice(["web", "blockchain"]), default=None)
+    @click.option("--output", "output_dir", default="./sternuke-out", show_default=True)
+    @click.option("--top-k", default=5, show_default=True)
+    def intel_cmd(query, domain, output_dir, top_k):
+        """Query local case-based memory for relevant weakness patterns."""
+        run_intel_query(query, output_dir, domain, top_k)
+
     @cli.command("gui")
     def gui_cmd():
         """Launch the graphical interface."""
@@ -235,6 +350,24 @@ else:  # ------------------------------------------------------------------
         scan.add_argument("--rule-format", choices=["yaml", "json"], default="yaml")
         scan.add_argument("-v", "--verbose", action="store_true")
 
+        chain = sub.add_parser("chain", help="Run a stateful business-logic chain.")
+        chain.add_argument("--target", required=True)
+        chain.add_argument("--path", default="/api/v1/cart/checkout")
+        chain.add_argument("--param", dest="params", action="append", default=[],
+                           metavar="KEY=VALUE")
+        chain.add_argument("--model", default="deepseek-coder")
+        chain.add_argument("--base-url", default="http://localhost:11434/v1")
+        chain.add_argument("--output", dest="output_dir", default="./sternuke-out")
+        chain.add_argument("--concurrency", type=int, default=10)
+        chain.add_argument("--rps", type=float, default=15.0)
+        chain.add_argument("-v", "--verbose", action="store_true")
+
+        intel = sub.add_parser("intel", help="Query local case-based memory.")
+        intel.add_argument("query")
+        intel.add_argument("--domain", choices=["web", "blockchain"], default=None)
+        intel.add_argument("--output", dest="output_dir", default="./sternuke-out")
+        intel.add_argument("--top-k", dest="top_k", type=int, default=5)
+
         sub.add_parser("gui", help="Launch the graphical interface.")
         return parser
 
@@ -244,6 +377,19 @@ else:  # ------------------------------------------------------------------
         if args.command == "gui":
             from .gui import launch_gui
             launch_gui()
+            return 0
+        if args.command == "intel":
+            run_intel_query(args.query, args.output_dir, args.domain, args.top_k)
+            return 0
+        if args.command == "chain":
+            parsed = dict(p.split("=", 1) for p in args.params if "=" in p) \
+                or {"quantity": "1"}
+            findings = asyncio.run(run_business_logic_chain(
+                target=args.target, path=args.path, params=parsed,
+                output_dir=args.output_dir, model=args.model, base_url=args.base_url,
+                concurrency=args.concurrency, rps=args.rps, verbose=args.verbose,
+            ))
+            print_summary(findings)
             return 0
         findings = asyncio.run(run_assessment(
             target=args.target, mode=args.mode, rules_path=args.rules_path,

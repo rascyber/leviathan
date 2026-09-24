@@ -7,3 +7,5 @@ PyYAML>=6.0
 click>=8.1
 # GUI (optional: tkinter fallback works without it)
 customtkinter>=5.2
+# Vector-memory acceleration (optional: pure-Python fallback works without it)
+numpy>=1.24

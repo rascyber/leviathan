@@ -21,6 +21,45 @@ Ollama / vLLM server, and all scan signatures are parsed locally.
 | `cli.py`      | CLI        | `click` interface (argparse fallback) with `--target`, `--mode`, `--model`, `--ai`, throttle flags. |
 | `gui.py`      | GUI        | `customtkinter` interface (tkinter fallback): target box, config selectors, live log, findings dashboard. |
 | `main.py`     | Entry      | Stitches everything together. |
+| `state_engine.py` | Stateful chaining | Session state manager, dependency-graph explorer (Step A output → Step B input), and the bounded self-correction ("refusal to fail") loop. |
+| `memory.py`   | Case-based reasoning | Zero-heavy-dependency local vector memory (hashing embedder + cosine recall) seeded with generic weakness-class knowledge; provides "strategic intuition". |
+| `cognitive.py` | Cognitive modules | Web business-logic mutation planner (param pollution / authz bypass / race) and blockchain cross-contract reentrancy analyzer. |
+
+## Cognitive layer (v1.1)
+
+Beyond stateless signature scanning, sternuke can reason across a *sequence* of
+interactions and recall relevant prior cases:
+
+* **Stateful chaining** — `StatefulChainEngine` threads cookies, tokens and
+  captured variables through a dependency-ordered chain, piping outputs of one
+  step into the parameters of the next (`{{variable}}` templating).
+* **Case-based memory** — before probing, `VectorMemory.strategic_intuition()`
+  matches the target's technology profile against remembered weakness classes to
+  prioritise testing. New footprints are remembered for next time.
+* **Business-logic mutation loop** — `BusinessLogicMutator.plan()` turns a single
+  endpoint into a stateful sequence testing negative/zero/duplicated parameters,
+  authorization bypass, and race conditions.
+* **Cross-contract analysis** — `CrossContractAnalyzer` maps external calls
+  (`call`/`delegatecall`/sends, Solana CPIs) and flags state writes that occur
+  *after* an external transfer (checks-effects-interactions violation → the
+  reentrancy / flash-loan-preparation footprint). Purely static.
+* **Self-correction** — when a benign probe is rejected (403/400/reverted),
+  `SelfCorrectionLoop` re-encodes the *same* input a bounded number of times to
+  distinguish "actually safe" from "input filter", staying within `ScanPolicy`.
+
+### New commands
+
+```bash
+# Query local case-based memory
+python -m sternuke.main intel "checkout race condition coupon" --domain web
+
+# Run a stateful business-logic chain against one endpoint (authorised targets only)
+python -m sternuke.main chain --target https://app.test \
+    --path /api/v1/cart/checkout --param quantity=1 --param item_id=9
+```
+
+Blockchain scans now also emit `call_graph.json` and cross-contract findings
+automatically.
 
 ## Installation
 
