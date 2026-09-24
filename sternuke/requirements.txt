@@ -1,0 +1,9 @@
+# sternuke framework dependencies (Python 3.11+)
+# Core async networking
+aiohttp>=3.9
+# Rule file parsing (YAML)
+PyYAML>=6.0
+# CLI (optional: argparse fallback works without it)
+click>=8.1
+# GUI (optional: tkinter fallback works without it)
+customtkinter>=5.2

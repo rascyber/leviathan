@@ -1,0 +1,82 @@
+# sternuke built-in web ruleset
+# Local, non-destructive detection signatures. Each document is one rule.
+# These identify common misconfigurations and information disclosure issues.
+---
+id: exposed-git-config
+info:
+  name: Exposed .git/config
+  severity: medium
+  description: The .git/config file is publicly readable, exposing repository metadata.
+  remediation: Deny web access to the .git directory at the server/CDN layer.
+  tags: [web, exposure, vcs]
+requests:
+  - method: GET
+    path: ["/.git/config"]
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["[core]", "repositoryformatversion"]
+        condition: and
+---
+id: exposed-dotenv
+info:
+  name: Exposed .env file
+  severity: high
+  description: A .env environment file is publicly readable and may contain secrets.
+  remediation: Block access to dotfiles and move secrets out of the web root.
+  tags: [web, exposure, secrets]
+requests:
+  - method: GET
+    path: ["/.env"]
+    matchers:
+      - type: regex
+        regex: ["(?i)(APP_KEY|DB_PASSWORD|SECRET|AWS_ACCESS_KEY_ID)\\s*="]
+---
+id: directory-listing
+info:
+  name: Directory listing enabled
+  severity: low
+  description: The server returns an auto-generated directory index.
+  remediation: Disable automatic directory indexing (e.g. Options -Indexes).
+  tags: [web, misconfig]
+requests:
+  - method: GET
+    path: ["/", "/uploads/", "/files/", "/backup/"]
+    matchers:
+      - type: word
+        words: ["Index of /", "<title>Index of"]
+        condition: or
+---
+id: missing-security-headers
+info:
+  name: Missing Content-Security-Policy header
+  severity: low
+  description: The response does not set a Content-Security-Policy header.
+  remediation: Add a restrictive Content-Security-Policy plus X-Frame-Options,
+    X-Content-Type-Options and Strict-Transport-Security.
+  tags: [web, misconfig, headers]
+requests:
+  - method: GET
+    path: ["/"]
+    matchers:
+      - type: regex
+        part: header
+        regex: ["(?i)content-security-policy"]
+        negative: true
+---
+id: server-version-disclosure
+info:
+  name: Server version disclosure
+  severity: info
+  description: The Server header discloses a specific software version.
+  remediation: Suppress version tokens in the Server header.
+  tags: [web, info]
+requests:
+  - method: GET
+    path: ["/"]
+    matchers:
+      - type: regex
+        part: header
+        regex: ["(?i)server:\\s*\\S+/\\d+\\.\\d+"]
