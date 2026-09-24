@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # title           :leviathan.py
 # description     :Leviathan, wide range mass audit toolkit.
@@ -7,7 +7,7 @@
 # version         :0.1.2
 # usage           :python leviathan.py
 # notes           :
-# python_version  :2.7.6
+# python_version  :3.11+
 # =======================================================================
 
 # Import the modules needed to run the script.
@@ -79,7 +79,7 @@ attack_actions = {}
 
 # Main menu
 def main_menu():
-    print """
+    print("""
 
 Select from the menu:
 
@@ -91,8 +91,8 @@ Select from the menu:
 0)Exit
 
 
-    """
-    choice = raw_input(">>")
+    """)
+    choice = input(">>")
     exec_menu(choice, menu_actions)
 
     return
@@ -100,7 +100,7 @@ Select from the menu:
 
 
 def menu1():
-    print """
+    print("""
 
  _______________          |*\_/*|________ 
 |  ___________  |        ||_/-\_|______  | 
@@ -135,14 +135,14 @@ Also you can discover websites according to a dork from Google. (option 4)
 
     9. Back
     0. Quit
-    """
-    choice = raw_input(" >>  ")
+    """)
+    choice = input(" >>  ")
     exec_menu(choice, menu1_actions)
     return
 
 
 def shodan():
-    print """
+    print("""
 
            +.       _____  .        .        + .                    .
    .        .   ,-~"     "~-.                                +
@@ -170,36 +170,36 @@ def shodan():
 
     9. Back
     0. Quit
-    """
-    choice = raw_input(">>")
+    """)
+    choice = input(">>")
     exec_menu(choice, shodan_actions)
     return
 
 
 def shodan_auto_query():
-    print """
+    print("""
     Enter Country Code:
 
     (Examples:TR,RU,USA,IT)
-    """
+    """)
 
-    country_code = raw_input(">>")
+    country_code = input(">>")
     try:
         COUNTRY_CODES[country_code.upper()]
     except KeyError:
-        print "Invalid selection, please try again.\n"
+        print("Invalid selection, please try again.\n")
         shodan()
 
-    print """
+    print("""
     Enter Protocol 
 
     (Examples:ssh, ftp, telnet, smb, rdp, mysql):
-    """
-    protocol = raw_input(">>")
+    """)
+    protocol = input(">>")
     try:
         shodan_protocols[protocol]
     except KeyError:
-        print "Invalid selection, please try again.\n"
+        print("Invalid selection, please try again.\n")
         shodan()
     query = query_constructor(country_code, protocol, 'shodan')
     res = shodan_search(query, protocol)
@@ -211,12 +211,12 @@ def shodan_auto_query():
 
 
 def shodan_custom_query():
-    print """
+    print("""
     Enter your query:
 
     (Example: apache city:"Istanbul")
-    """
-    query = raw_input(">>")
+    """)
+    query = input(">>")
     protocol = "custom"
     res = shodan_search(query, protocol)
     if res:
@@ -228,7 +228,7 @@ def shodan_custom_query():
 
 
 def censys():
-    print """
+    print("""
 
                +.   _____  .        .        + .                    .
    .        .   ,-~"     "~-.                                +
@@ -256,37 +256,37 @@ def censys():
 
     9. Back
     0. Quit
-    """
-    choice = raw_input(">>")
+    """)
+    choice = input(">>")
     exec_menu(choice, censys_actions)
     return
 
 
 #TODO: basarili bir sekilde kaydetmesine ragmen invalid selection'a dusuyor
 def censys_auto_query():
-    print """
+    print("""
         Enter Country Code:
 
         (Examples:TR,RU,USA,IT)
-        """
+        """)
 
-    country_code = raw_input(">>")
+    country_code = input(">>")
     try:
         COUNTRY_CODES[country_code.upper()]
     except KeyError:
-        print "Invalid selection, please try again.\n"
+        print("Invalid selection, please try again.\n")
         censys_auto_query()
 
-    print """
+    print("""
         Enter Protocol 
 
         (Examples:ssh, ftp, telnet):
-        """
-    protocol = raw_input(">>")
+        """)
+    protocol = input(">>")
     try:
         censys_protocols[protocol]
     except KeyError:
-        print "Invalid selection, please try again.\n"
+        print("Invalid selection, please try again.\n")
         censys()
     query = query_constructor(country_code, protocol, 'censys')
     res = censys_search(query, protocol)
@@ -299,12 +299,12 @@ def censys_auto_query():
 
 #TODO: basarili bir sekilde kaydetmesine ragmen invalid selection'a dusuyor
 def censys_custom_query():
-    print """
+    print("""
     Enter your query:
 
     (Example: location.country_code: US and tags: scada)
-    """
-    query = raw_input(">>")
+    """)
+    query = input(">>")
     protocol = "custom"
     res = censys_search(query, protocol)
     if res:
@@ -315,7 +315,7 @@ def censys_custom_query():
 
 
 def masscan():
-    print """
+    print("""
 
           ,;;;,
          ;;;;;;; --> Robert David Graham
@@ -332,14 +332,14 @@ def masscan():
     Enter IP range:
 
     (Examples:83.49.0.0/16, 0.0.0.0/0)
-    """
-    ip_range = raw_input(">>")
-    print """
+    """)
+    ip_range = input(">>")
+    print("""
     Enter Protocol 
 
     (Examples:ssh, ftp, telnet, smb, rdp, mysql):
-    """
-    protocol = raw_input(">>")
+    """)
+    protocol = input(">>")
     res = mass_scan(ip_range, protocol)
     if res:
         time.sleep(5)
@@ -349,7 +349,7 @@ def masscan():
 
 
 def webscan():
-    print """
+    print("""
 
                                  \_______/
                              `.,-'\_____/`-.,'      
@@ -375,46 +375,46 @@ def webscan():
 
     9. Back
     0. Quit
-    """
-    choice = raw_input(">>")
+    """)
+    choice = input(">>")
     exec_menu(choice, webscan_actions)
     return
 
 
 def webscan_auto_dork():
-    print """
+    print("""
 
     Enter Country Code:
 
     (Examples:tr,usa,ru,ca)
 
-    """
+    """)
 
-    country_code = raw_input(">>")
+    country_code = input(">>")
     try:
         COUNTRY_CODES[country_code.upper()]
     except KeyError:
-        print "Invalid selection, please try again.\n"
+        print("Invalid selection, please try again.\n")
         webscan_auto_dork()
 
-    print """
+    print("""
 
     Enter domain extension:
 
     (Example:gov,edu,org)
 
-    """
-    extension = raw_input(">>")
+    """)
+    extension = input(">>")
     try:
         pass
     except KeyError:
-        print "Invalid selection, please try again.\n"
+        print("Invalid selection, please try again.\n")
         webscan_auto_dork()
 
-    print """
+    print("""
         Number of URLs to extract:
-        """
-    number = int(raw_input(">>"))
+        """)
+    number = int(input(">>"))
 
     query = automatic_dork(country_code, extension)
     res = link_extract(query, number)
@@ -427,16 +427,16 @@ def webscan_auto_dork():
 
 
 def webscan_custom_dork():
-    print """
+    print("""
         Enter your dork:
 
         (Example: inurl:.php?id=)
-        """
-    query = raw_input(">>")
-    print """
+        """)
+    query = input(">>")
+    print("""
         Number of URLs to extract:
-        """
-    number = int(raw_input(">>"))
+        """)
+    number = int(input(">>"))
     res = link_extract(query, number)
     res = 1
     if res:
@@ -448,7 +448,7 @@ def webscan_custom_dork():
 
 
 def menu2():
-    print """
+    print("""
                                                              c=====e
                                                                 H
        ____________                                         _,,_H____
@@ -479,14 +479,14 @@ def menu2():
 
     9. Back
     0. Quit
-    """
-    choice = raw_input(" >>  ")
+    """)
+    choice = input(" >>  ")
     exec_menu(choice, menu2_actions)
     return
 
 
 def bruteforce():
-    print """
+    print("""
                     ,N.
                   _/__ \   "If you eliminate all other possibilities
                    -/o\_\  the one that remains, however unlikely,
@@ -514,24 +514,24 @@ def bruteforce():
     9. Back
     0. Quit
 
-    """
-    attack_type = raw_input(">>")
+    """)
+    attack_type = input(">>")
     exec_menu(attack_type, attack_actions)
     return
 
 
 def bruteforce_specific():
-    print """
+    print("""
     IP Address:
-    """
-    ip_address = raw_input(">>")
+    """)
+    ip_address = input(">>")
 
-    print """
+    print("""
     Port Number:
-    """
-    port = raw_input(">>")
+    """)
+    port = input(">>")
 
-    print """
+    print("""
     Select Protocol:
 
     1. ftp
@@ -543,8 +543,8 @@ def bruteforce_specific():
     9. back
     0. exit
 
-    """
-    index = raw_input(">>")
+    """)
+    index = input(">>")
     try:
         protocol = bruteforce_all_protocols[index]
         res = brute_force_specific(ip_address, port, protocol)
@@ -558,10 +558,10 @@ def bruteforce_specific():
 
 
 def bruteforce_by_discovery_id():
-    print """
+    print("""
     Discovery ID:
-    """
-    discovery_id = raw_input(">>")
+    """)
+    discovery_id = input(">>")
     res = brute_force(discovery_id)
     if res:
         time.sleep(5)
@@ -571,7 +571,7 @@ def bruteforce_by_discovery_id():
 
 
 def bruteforce_all_menu():
-    print """
+    print("""
     Select Protocol:
 
     1. ftp
@@ -583,8 +583,8 @@ def bruteforce_all_menu():
     9. back
     0. exit
 
-    """
-    index = raw_input(">>")
+    """)
+    index = input(">>")
     try:
         selected = bruteforce_all_protocols[index]
         res = bruteforce_all(selected)
@@ -598,7 +598,7 @@ def bruteforce_all_menu():
 
 
 def sqli_menu():
-    print """
+    print("""
                   Anatomy of Miroslav Stampar
 
              ___           _,.---,---.,_
@@ -631,18 +631,18 @@ def sqli_menu():
         9. Back
         0. Quit
 
-        """
-    attack_type = raw_input(">>")
+        """)
+    attack_type = input(">>")
     exec_menu(attack_type, slqi_attack_actions)
     return
 
 
 
 def sqli_by_discovery_id():
-    print """
+    print("""
         Discovery ID:
-        """
-    discovery_id = raw_input(">>")
+        """)
+    discovery_id = input(">>")
     res = sqli_scan(discovery_id)
     if res:
         time.sleep(5)
@@ -653,10 +653,10 @@ def sqli_by_discovery_id():
 
 
 def sqli_attack_all():
-    print """
+    print("""
         Attack starting..:
 
-        """
+        """)
     res = sqli_scan_all()
     if res:
         time.sleep(5)
@@ -666,7 +666,7 @@ def sqli_attack_all():
 
 
 def custom_exploit():
-    print """
+    print("""
                                                         .:^
                                  ^                     /   :
                     '`.        /;/                    /    /
@@ -682,35 +682,35 @@ def custom_exploit():
     Firstly, you need to specifiy your targets by providing a discovery id.
     After then, you need to choose an exploit. Available exploits will be listed
 
-    """
-    print """
+    """)
+    print("""
         Discovery ID:
-        """
-    discovery_id = raw_input(">>")
-    print "Existing exploits:\n"
+        """)
+    discovery_id = input(">>")
+    print("Existing exploits:\n")
     files = glob.glob(BASE_DIR+"/lib/exploits/*.py")
     for file in files:
         f = file.split("/")[-1].split(".")[0]
         if f != "__init__":
             show_desc = getattr(importlib.import_module("lib.exploits.%s" % f) , "show_desc")
-            print f, ":", show_desc()
-    print """
+            print(f, ":", show_desc())
+    print("""
         Exploit name:
         (Example:shellshock)
-        """
-    exploit_name= raw_input(">>")
+        """)
+    exploit_name= input(">>")
     try:
         action = getattr(importlib.import_module("lib.exploits.%s" % exploit_name) , "action")
         action(discovery_id)
     except ImportError as e:
-        print "Invalid Exploit name"
+        print("Invalid Exploit name")
 
     time.sleep(10)
     main_menu()
 
 
 def run_command():
-    print """
+    print("""
 
                 ,----------------,                ,---------, 
             ,--------------------------,        ,"        ," |
@@ -740,30 +740,30 @@ def run_command():
     9. Back
     0. Quit
 
-    """
-    selected = raw_input(">>")
+    """)
+    selected = input(">>")
     exec_menu(selected, run_command_actions)
 
 
 def run_by_discovery_id():
-    print """
+    print("""
     >> Discovery ID:
-    """
-    discovery_id = raw_input(">>")
-    print """
+    """)
+    discovery_id = input(">>")
+    print("""
     >> Enter your command:
-    """
-    command = raw_input(">>")
+    """)
+    command = input(">>")
     send_command_ssh(discovery_id, command)
     time.sleep(2)
     main_menu()
 
 
 def run_for_all():
-    print """
+    print("""
     >> Enter your command:
-    """
-    command = raw_input(">>")
+    """)
+    command = input(">>")
     send_to_all_ssh(command)
     time.sleep(2)
     main_menu()
@@ -771,7 +771,7 @@ def run_for_all():
 
 
 def menu3():
-    print """
+    print("""
             _.------.                        .----.__
            /         |_.       ._           /---.__  |
           |  O    O   |||___  //|          /       `| |
@@ -800,14 +800,14 @@ def menu3():
 
     9. Back
     0. Quit
-    """
-    choice = raw_input(" >>  ")
+    """)
+    choice = input(" >>  ")
     exec_menu(choice, menu3_actions)
     return
 
 
 def show_discovered():
-    print """
+    print("""
     Select Protocol:
 
     1. ftp
@@ -821,8 +821,8 @@ def show_discovered():
     9. back
     0. exit
 
-    """
-    selected = raw_input(">>")
+    """)
+    selected = input(">>")
     try:
         protocol = show_assets_protocols[selected]
         return_asset(protocol, "discovered")
@@ -833,7 +833,7 @@ def show_discovered():
 
 
 def show_preview_menu(type):
-    print """
+    print("""
     Select From Menu:
 
     1. Show Preview by ID
@@ -841,29 +841,29 @@ def show_preview_menu(type):
     9. back
     0. exit
 
-    """
-    selected = raw_input(">>")
+    """)
+    selected = input(">>")
     if selected == '1':
-        print "Enter discovery id:"
-        discovery_id = raw_input(">>")
+        print("Enter discovery id:")
+        discovery_id = input(">>")
         try:
             file = get_file_by_dicovery_id(discovery_id, type)
             if file:
-                with open(file, "r") as content:
+                with open(file, "r", encoding="utf-8") as content:
                     content_split = content.read().splitlines()
                     for count, line in enumerate(content_split):
-                        print line
+                        print(line)
                         if count > 5:
                             break
         except IOError:
-            print "There is no such dicovery id."
+            print("There is no such dicovery id.")
         main_menu()
     else:
         exec_menu(selected, assets_actions)
 
 
 def show_compromised():
-    print """
+    print("""
     Select Protocol:
 
     1. ftp
@@ -877,8 +877,8 @@ def show_compromised():
     9. back
     0. exit
 
-    """
-    selected = raw_input(">>")
+    """)
+    selected = input(">>")
 
     try:
         protocol = show_assets_protocols[selected]
@@ -890,7 +890,7 @@ def show_compromised():
 
 
 def menu4():
-    print """
+    print("""
 
 
                                                  .------.------.    
@@ -924,23 +924,23 @@ def menu4():
     
     9. Back
     0. Quit
-    """
-    choice = raw_input(" >>  ")
+    """)
+    choice = input(" >>  ")
     try:
         parameter = menu4_keys[choice]
-        print ">> Enter your key:"
-        key = raw_input(">> ")
+        print(">> Enter your key:")
+        key = input(">> ")
         config_change(parameter, key)
     except KeyError:
         exec_menu(choice, menu4_actions)
-    print """
+    print("""
     Select From Menu:
 
     9. back
     0. exit
 
-    """
-    selected = raw_input(">>")
+    """)
+    selected = input(">>")
     if selected == '9':
         menu4()
     else:
@@ -971,7 +971,7 @@ def exec_menu(choice, menu_actions, parameter=None):
         try:
             menu_actions[ch]()
         except KeyError:
-            print "Invalid selection, please try again.\n"
+            print("Invalid selection, please try again.\n")
             menu_actions['main_menu']()
     return
 
@@ -1092,8 +1092,9 @@ if __name__ == "__main__":
     # Launch main menu
     os.system('clear')
     import sys
-    sys.stdout.write("\x1b[8;{rows};{cols}t".format(rows=37, cols=92))
-    print """
+    rows, cols = 37, 92
+    sys.stdout.write(f"\x1b[8;{rows};{cols}t")
+    print("""
  ▓▓▀▀▓█▀ ▌█▓▓▓▓▓
  ██         ▓▓▓▓    ▓                  █          ▓    ▌
             ▓▓▓▌    ▓  ██▀▀▓█ ▓     ██ ▓  ██▀▀█▓ ▓▓█▓─ ▓█▀▀██  ╓██▀██▄ ███▀▀▓▓
@@ -1116,9 +1117,9 @@ LEGAL WARNING: While this may be helpful for some, there are significant risks.
 You could go to jail on obstruction of justice charges just for running leviathan,
 even though you are innocent. You are on notice, that using this tool outside your
 "own" environment is considered malicious and is against the law. Use with caution.
-    """
+    """)
     try:
         main_menu()
     except KeyboardInterrupt:
-        print "Killed!"
+        print("Killed!")
         sys.exit()

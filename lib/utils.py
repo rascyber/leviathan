@@ -16,7 +16,7 @@ class TimeoutError(Exception):
     pass
 
 
-def timeout(seconds=30, error_message=os.strerror(errno.ETIME)):
+def timeout(seconds: int = 30, error_message: str = os.strerror(errno.ETIME)):
     def decorator(func):
         def _handle_timeout(signum, frame):
             raise TimeoutError(error_message)
@@ -35,13 +35,13 @@ def timeout(seconds=30, error_message=os.strerror(errno.ETIME)):
     return decorator
 
 
-def id_generator():
+def id_generator() -> int:
     range_start = 10 ** (7 - 1)
     range_end = (10 ** 7) - 1
     return randint(range_start, range_end)
 
 
-def get_protocol_by_service(protocol, service):
+def get_protocol_by_service(protocol: str, service: str):
     return {
         'censys': {'ftp': '"21/ftp"', 'ssh': '"22/ssh"', 'telnet': '"23/telnet"'}.get(protocol, False),
         'massscan': {'ftp': '-p21', 'ssh': '-p22', 'telnet': '-p23', 'smb': '-p445' , 'rdp': '-p3389',
@@ -51,7 +51,7 @@ def get_protocol_by_service(protocol, service):
            'mysql': '3306'}.get(protocol, False))
 
 
-def get_output_file_by_scanner(scanner, discovery_id, protocol):
+def get_output_file_by_scanner(scanner: str, discovery_id: str, protocol: str) -> str:
     return {
         'massscan': os.path.join(BASE_DIR, 'assets', 'discovered', 'masscan_' +
                                  protocol + '_' + str(discovery_id) + '.txt'),
@@ -62,7 +62,7 @@ def get_output_file_by_scanner(scanner, discovery_id, protocol):
     }.get(scanner, '')
 
 
-def get_protocol_info(protocol):
+def get_protocol_info(protocol: str) -> dict:
     return {
         'ftp': ('21', 'ftp_default_user.txt', 'generic_pass.txt'),
         'ssh': ('22', 'ssh_default_user.txt', 'generic_pass.txt'),
@@ -72,7 +72,7 @@ def get_protocol_info(protocol):
     }.get(protocol, (None, None, None))
 
 
-def get_command(protocol, port, user_fullpath, pass_fullpath, ip):
+def get_command(protocol: str, port: str, user_fullpath: str, pass_fullpath: str, ip: str):
     return {
         'telnet': ['ncrack', '-p', port, '-U', user_fullpath, '-P', pass_fullpath, '--pairwise', ip,
                    '-T5']
@@ -81,14 +81,14 @@ def get_command(protocol, port, user_fullpath, pass_fullpath, ip):
           )
 
 
-def get_protocol(filename):
+def get_protocol(filename: str) -> str:
     try:
         return filename.split('_')[1]
     except:
         return 0
 
 
-def get_possible_protocols_files(filename):
+def get_possible_protocols_files(filename: str) -> tuple:
     protocols = []
     files = glob.glob(filename)
     for f in files:
@@ -96,36 +96,36 @@ def get_possible_protocols_files(filename):
     return protocols, files
 
 
-def select_protocol(possible_protocols):
+def select_protocol(possible_protocols: list):
     message = "This asset has more than one result. Please select protocol:\n"
     for idx, p in enumerate(possible_protocols):
         message += "%s for %s\n" % (str(idx), p)
     message += "Press q to exit "
-    selected_protocol = raw_input(message)
+    selected_protocol = input(message)
     try:
         if selected_protocol == "q":
             return 0
         return possible_protocols[int(selected_protocol)]
     except:
-        print "This selection is not valid: %s" % selected_protocol
+        print("This selection is not valid: %s" % selected_protocol)
         select_protocol(possible_protocols)
 
 
-def automatic_dork(country_code, extension):
+def automatic_dork(country_code: str, extension: str) -> str:
     return "inurl:.php?id=" + " inurl:" + extension + "." + country_code
 
 
-def query_constructor(country, protocol, service):
+def query_constructor(country: str, protocol: str, service: str):
     port = get_protocol_by_service(protocol, service)
     return {
         'censys': 'location.country_code: ' + country + ' and protocols: ' + port,
     }.get(service, "country:" + country + " port:" + port)
 
 
-def config_change(api_name, value):
-    with open(os.path.join(BASE_DIR, 'leviathan_config.py'), 'r') as config_file:
+def config_change(api_name: str, value: str) -> None:
+    with open(os.path.join(BASE_DIR, 'leviathan_config.py'), 'r', encoding='utf-8') as config_file:
         file_str = config_file.read().splitlines()
-    with open(os.path.join(BASE_DIR, 'leviathan_config.py'), 'w') as config_file:
+    with open(os.path.join(BASE_DIR, 'leviathan_config.py'), 'w', encoding='utf-8') as config_file:
         for line in file_str:
             if not line.startswith(api_name):
                 config_file.write(line)
@@ -136,45 +136,45 @@ def config_change(api_name, value):
 
 
 # for custom exploits, converts discovery file into list
-def discovery_parse(discovery_id):
+def discovery_parse(discovery_id: str):
     try:
         discovery_file = os.path.join(BASE_DIR, 'assets', 'discovered', '*' + discovery_id + '.txt')
         possible_protocols, file = get_possible_protocols_files(discovery_file)
         if file:
-            with open(file[0], "r") as f:
+            with open(file[0], "r", encoding="utf-8") as f:
                 content = f.readlines()
             return [x.strip() for x in content]
         return []
     except IOError:
-        print "There is no such file: %s" % output_file
+        print("There is no such file: %s" % output_file)
         return 0
 
 
-def get_file_by_dicovery_id(discovery_id, type):
+def get_file_by_dicovery_id(discovery_id: str, type: str):
     discovery_file = os.path.join(BASE_DIR, 'assets', type, '*' + discovery_id + '.txt')
     possible_protocols, file = get_possible_protocols_files(discovery_file)
     if file:
         return file[0]
     else:
-        print "There is no such file with this discovery id: %s" % discovery_id
+        print("There is no such file with this discovery id: %s" % discovery_id)
         return ''
 
 
 
-def compromise_save(discovery_id, exploit_name, asset_list):
+def compromise_save(discovery_id: str, exploit_name: str, asset_list: list) -> None:
     try:
         file_name = "custom_%s_%s.txt" % (exploit_name, str(discovery_id))
         save_location = os.path.join(BASE_DIR, 'assets', 'compromised', file_name)
-        with open(save_location, "a") as compromised:
+        with open(save_location, "a", encoding="utf-8") as compromised:
             for i in asset_list:
                 compromised.write(i)
                 compromised.write("\n")
     except IOError:
-        print "There is no such file: %s" % output_file
+        print("There is no such file: %s" % output_file)
         return 0
 
 
-def return_asset(protocol, type):
+def return_asset(protocol: str, type: str):
     try:
         if protocol != 'all':
             filename = os.path.join(BASE_DIR, 'assets', type, '*_' + protocol + '_*.txt')
@@ -183,14 +183,14 @@ def return_asset(protocol, type):
         possible_protocols, files = get_possible_protocols_files(filename)
         for j, i in enumerate(files):
             discovery_id = i.split("_")[2].split(".")[0]
-            print "ID:" + discovery_id + " | Protocol:" + possible_protocols[j] + " | Method:" + \
-                  i.split("_")[0].split("/")[-1] + " | Count:" + str(file_len(i)) + " | Date:" + time.ctime(os.path.getmtime(i))
+            print("ID:" + discovery_id + " | Protocol:" + possible_protocols[j] + " | Method:" + \
+                  i.split("_")[0].split("/")[-1] + " | Count:" + str(file_len(i)) + " | Date:" + time.ctime(os.path.getmtime(i)))
     except IOError:
-        print "There is no such file: %s" % output_file
+        print("There is no such file: %s" % output_file)
         return 0
 
-def show_config_file():
-    print """
+def show_config_file() -> None:
+    print("""
 
         GOOGLE_API_KEY = %s
         GOOGLE_CSE_ID = %s
@@ -199,12 +199,12 @@ def show_config_file():
         CENSYS_SECRET = %s
         SHODAN_API_KEY = %s
 
-    """ % (GOOGLE_API_KEY, GOOGLE_CSE_ID, CENSYS_API_URL, CENSYS_UID, CENSYS_SECRET, SHODAN_API_KEY)
+    """ % (GOOGLE_API_KEY, GOOGLE_CSE_ID, CENSYS_API_URL, CENSYS_UID, CENSYS_SECRET, SHODAN_API_KEY))
     return
 
 
 # Print iterations progress
-def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█'):
+def printProgressBar(iteration: int, total: int, prefix: str = '', suffix: str = '', decimals: int = 1, length: int = 100, fill: str = '█') -> str:
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -222,9 +222,9 @@ def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=
     return '\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix)
     # Print New Line on Complete
 
-def file_len(fname):
+def file_len(fname: str) -> int:
     try:
-        with open(fname) as f:
+        with open(fname, encoding="utf-8") as f:
             for i, l in enumerate(f):
                 pass
         return i + 1

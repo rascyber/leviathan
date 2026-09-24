@@ -4,10 +4,10 @@ from time import sleep
 from subprocess import check_output
 import glob
 from leviathan_config import BASE_DIR
-from utils import get_possible_protocols_files, select_protocol, get_protocol_info, get_command, printProgressBar, timeout
+from .utils import get_possible_protocols_files, select_protocol, get_protocol_info, get_command, printProgressBar, timeout
 
 
-def brute_force(discovery_id):
+def brute_force(discovery_id: str) -> str | None:
     cracked_list = []
     filename = os.path.join(BASE_DIR, 'assets', 'discovered', '*' + discovery_id + '.txt')
     possible_protocols, files = get_possible_protocols_files(filename)
@@ -21,7 +21,7 @@ def brute_force(discovery_id):
         filename = files[0]
         protocol = possible_protocols[0]
     else:
-        msg = "There is no asset with this Discovery ID: %s" % discovery_id
+        msg = f"There is no asset with this Discovery ID: {discovery_id}"
         return msg
 
     port, user_list, pass_list = get_protocol_info(protocol)
@@ -30,7 +30,7 @@ def brute_force(discovery_id):
         pass_fullpath = os.path.join(BASE_DIR, 'config', 'wordlists', pass_list)
         ip_fullpath = os.path.join(BASE_DIR, 'config', 'wordlists', filename)
 
-        with open(ip_fullpath, "r") as ipfile:
+        with open(ip_fullpath, "r", encoding="utf-8") as ipfile:
             iplist = ipfile.readlines()
             for ipaddress in iplist:
                 try:
@@ -38,15 +38,15 @@ def brute_force(discovery_id):
                 except KeyboardInterrupt:
                     break
                 except:
-                    print "Operation Timeout"
+                    print("Operation Timeout")
             else:
-                return "Misformatted asset file %s.txt" % discovery_id
+                return f"Misformatted asset file {discovery_id}.txt"
 
-            print ""
-            print "Finished"
+            print("")
+            print("Finished")
 
 
-def brute_force_specific(ip_address, port_number, protocol):
+def brute_force_specific(ip_address: str, port_number: str, protocol: str) -> None:
     cracked_list = []
 
     port, user_list, pass_list = get_protocol_info(protocol)
@@ -61,16 +61,16 @@ def brute_force_specific(ip_address, port_number, protocol):
         except KeyboardInterrupt:
             return
         except:
-            print "Operation Timeout"
+            print("Operation Timeout")
 
-        print ""
-        print "Finished"
+        print("")
+        print("Finished")
 
 
 @timeout(50)
-def brute_force_by_ip(ipaddress, user_fullpath, pass_fullpath, ip_fullpath, protocol, port):
+def brute_force_by_ip(ipaddress: str, user_fullpath: str, pass_fullpath: str, ip_fullpath: str, protocol: str, port: str) -> None:
     ipaddress = ipaddress.strip("\n")
-    print "\nTrying: " +ipaddress
+    print("\nTrying: " +ipaddress)
     cmd = get_command(protocol, port, user_fullpath, pass_fullpath, ipaddress)
     output = check_output(cmd)
     output_list = output.split('\n')
@@ -83,16 +83,16 @@ def brute_force_by_ip(ipaddress, user_fullpath, pass_fullpath, ip_fullpath, prot
                 protocol = tokens[2].split(":")[0]
                 username = tokens[3].split("'")[1]
                 password = tokens[4].split("'")[1]
-                print "Cracked! " + ip + " " + username + " " + password
+                print("Cracked! " + ip + " " + username + " " + password)
                 cracked_list.append(ip+" "+username+" "+password)
-                ncrack_file_name = "ncrack_%s_%s.txt" % (protocol, str(discovery_id))
+                ncrack_file_name = f"ncrack_{protocol}_{discovery_id}.txt"
                 ncrack_file = os.path.join(BASE_DIR, 'assets', 'compromised', ncrack_file_name)
-                with open(ncrack_file, "a") as cracked:
-                    cracked.write("%s:%s:%s" % (ip, username, password))
+                with open(ncrack_file, "a", encoding="utf-8") as cracked:
+                    cracked.write(f"{ip}:{username}:{password}")
                     cracked.write("\n")
 
 # TODO: needs to be tested
-def bruteforce_all(protocol):
+def bruteforce_all(protocol: str) -> None:
     discovered_files_reg = os.path.join(BASE_DIR, 'assets', 'discovered', '*_' + protocol + '_*.txt')
     discovered_files = glob.glob(discovered_files_reg)
     for df in discovered_files:

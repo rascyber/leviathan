@@ -6,25 +6,25 @@ import time
 import paramiko
 
 from leviathan_config import BASE_DIR
-from utils import get_possible_protocols_files, printProgressBar
+from .utils import get_possible_protocols_files, printProgressBar
 
 
-def send_command_ssh(discovery_id, command, credentials_file=None):
+def send_command_ssh(discovery_id: str, command: str, credentials_file: str | None = None) -> None:
     if credentials_file is None:
         if discovery_id:
             try:
-                credentials_files = os.path.join(BASE_DIR, 'assets', 'compromised', '*%s.txt' % discovery_id)
+                credentials_files = os.path.join(BASE_DIR, 'assets', 'compromised', f'*{discovery_id}.txt')
                 protocols, cf = get_possible_protocols_files(credentials_files)
                 credentials_file = cf[0]
             except Exception as e:
-                print "There is no such discovery id!!"
-                print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e), e)
+                print("There is no such discovery id!!")
+                print(f'Error on line {sys.exc_info()[-1].tb_lineno}', type(e), e)
                 return 0
         else:
             return 0
     try:
        
-        with open(credentials_file, "r") as credentials:
+        with open(credentials_file, "r", encoding="utf-8") as credentials:
             lines = [line.strip() for line in credentials if line.strip()]
             i = 0
             l = len(lines)
@@ -43,12 +43,12 @@ def send_command_ssh(discovery_id, command, credentials_file=None):
                 sys.stdout.write(printProgressBar(i, l, prefix='Progress:', suffix='Complete', length=50))
                 time.sleep(0.1)
                 sys.stdout.flush()
-            print "\nFinished"
+            print("\nFinished")
     except IOError:
-        print "There is no such file: %s" % credentials_file
+        print(f"There is no such file: {credentials_file}")
 
 
-def send_to_all_ssh(command):
+def send_to_all_ssh(command: str) -> None:
     credentials_files_reg = os.path.join(BASE_DIR, 'assets', 'compromised', '*_ssh_*.txt')
     credentials_files = glob.glob(credentials_files_reg)
     for cf in credentials_files:

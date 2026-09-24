@@ -1,6 +1,8 @@
-paramiko
-shodan
-bs4
-lxml
-google-api-python-client
-requests
+# Leviathan runtime dependencies (Python 3.11+)
+# Pinned to modern, actively maintained releases with Python 3 wheels.
+paramiko>=3.4,<4.0
+shodan>=1.31,<2.0
+beautifulsoup4>=4.12,<5.0
+lxml>=5.1
+google-api-python-client>=2.100
+requests>=2.31
