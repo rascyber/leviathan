@@ -61,6 +61,46 @@ python -m sternuke.main chain --target https://app.test \
 Blockchain scans now also emit `call_graph.json` and cross-contract findings
 automatically.
 
+## Fuzzing subsystem (v1.2)
+
+`sternuke/fuzzing/` adds an automated payload-mutation engine with three domain
+drivers over a shared mutation core (`ByteMutator`, `TypedMutator`, `Corpus`,
+`CrashBucket`). **Every driver is local-by-default** (`fuzzing/guards.py`): it
+refuses non-local targets unless you pass `--allow-remote` to explicitly accept
+authorization for a system you are permitted to test.
+
+* **Web/API** — `WebFuzzer` mutates request parameters (structural, encoding,
+  type-confusion, byte-havoc) and flags anomalies: reflected error signatures
+  (SQL/stack traces), 5xx, and large response-size deltas. Runs under the
+  engine's `ScanPolicy` throttles.
+* **Smart contract** — `ContractFuzzer` does ABI-aware, property/invariant-based
+  fuzzing against a **local** node (anvil/hardhat). Keccak-256 and ABI encoding
+  are implemented locally (no web3 dependency); it fuzzes state-changing
+  functions and reports when an `echidna_*`/`invariant_*`/`prop_*` boolean view
+  that held at baseline later returns false or reverts.
+* **Binary** — `BinaryFuzzer` runs a bounded, black-box mutational campaign
+  against a **local** executable (stdin or `@@` file arg), triaging crashes by
+  signal + sanitizer signature and de-duplicating them into unique defects with
+  saved reproducers. (Black-box, not coverage-guided — pair with AFL++/libFuzzer
+  for coverage; use this for triage.)
+
+### Fuzzing commands
+
+```bash
+# Web parameter fuzzing (local target; --allow-remote to opt into an authorised remote)
+python -m sternuke.main fuzz --mode web --target "http://127.0.0.1:8080/search?q=x"
+
+# Binary fuzzing of a local executable, feeding stdin
+python -m sternuke.main fuzz --mode binary --binary ./parser \
+    --max-execs 5000 --seconds 120 --seed-dir ./corpus
+
+# Property-based contract fuzzing against a local node
+python -m sternuke.main fuzz --mode contract --rpc http://127.0.0.1:8545 \
+    --address 0xYourContract --sig "setRate(uint256)" --sig "prop_solvency()"
+```
+
+Crashes are written to `<output>/crashes/`; all findings land in `findings.json`.
+
 ## Installation
 
 ```bash

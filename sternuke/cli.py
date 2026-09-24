@@ -37,6 +37,10 @@ from .engine import (
 from .ai_agent import AIAgent, LocalModelClient, ModelConfig
 from .cognitive import CrossContractAnalyzer
 from .memory import build_default_memory
+from .fuzzing.guards import ScopeError
+
+# Errors that should surface to the user as a clean message, not a traceback.
+_CLEAN_ERRORS = (ScopeError, ValueError, FileNotFoundError, NotADirectoryError)
 
 try:
     import click
@@ -191,6 +195,88 @@ async def run_business_logic_chain(
     return result.findings
 
 
+async def run_fuzz(
+    *,
+    mode: str,
+    output_dir: str,
+    verbose: bool,
+    # web
+    target: Optional[str] = None,
+    method: str = "GET",
+    body: Optional[str] = None,
+    payloads_per_param: int = 40,
+    concurrency: int = 20,
+    rps: float = 25.0,
+    allow_remote: bool = False,
+    # binary
+    binary: Optional[str] = None,
+    input_mode: str = "stdin",
+    prog_args: Optional[List[str]] = None,
+    max_execs: int = 2000,
+    seconds: float = 60.0,
+    seed_dir: Optional[str] = None,
+    # contract
+    rpc: Optional[str] = None,
+    address: Optional[str] = None,
+    signatures: Optional[List[str]] = None,
+    abi_path: Optional[str] = None,
+    sender: Optional[str] = None,
+    max_calls: int = 400,
+) -> List[Finding]:
+    """Dispatch to the requested fuzzer. Targets stay local unless allow_remote.
+
+    Exercises the mutation subsystem for web parameters, local contracts, or
+    local binaries. Intended for assessment of systems you control.
+    """
+    log = _console_logger(verbose)
+    os.makedirs(output_dir, exist_ok=True)
+    findings: List[Finding] = []
+
+    if mode == "web":
+        from .fuzzing import WebFuzzer, WebFuzzBudget
+        if not target:
+            raise ValueError("web fuzzing requires --target")
+        fuzzer = WebFuzzer(
+            ScanPolicy(max_concurrency=concurrency, requests_per_second=rps),
+            budget=WebFuzzBudget(payloads_per_param=payloads_per_param),
+            allow_remote=allow_remote, logger=log)
+        report = await fuzzer.fuzz(target, method=method, body=body)
+        findings = report.findings
+
+    elif mode == "binary":
+        from .fuzzing import BinaryFuzzer, FuzzBudget
+        if not binary:
+            raise ValueError("binary fuzzing requires --binary")
+        fuzzer = BinaryFuzzer(
+            binary, args=prog_args or [], input_mode=input_mode,
+            budget=FuzzBudget(max_execs=max_execs, max_seconds=seconds), logger=log)
+        report = await fuzzer.run(seed_dir=seed_dir,
+                                  crash_dir=os.path.join(output_dir, "crashes"))
+        findings = report.findings
+
+    elif mode == "contract":
+        from .fuzzing import ContractFuzzer
+        if not (rpc and address):
+            raise ValueError("contract fuzzing requires --rpc and --address")
+        if abi_path:
+            with open(abi_path, "r", encoding="utf-8") as fh:
+                abi = json.load(fh)
+            fns = ContractFuzzer.functions_from_abi(abi)
+        elif signatures:
+            fns = ContractFuzzer.functions_from_signatures(signatures)
+        else:
+            raise ValueError("contract fuzzing requires --abi or one or more --sig")
+        fuzzer = ContractFuzzer(rpc, address, functions=fns, sender=sender,
+                                max_calls=max_calls, allow_remote=allow_remote, logger=log)
+        report = await fuzzer.run()
+        findings = report.findings
+    else:
+        raise ValueError(f"Unknown fuzz mode: {mode!r} (web|binary|contract)")
+
+    _write_report(findings, output_dir)
+    return findings
+
+
 def run_intel_query(query: str, output_dir: str, domain: Optional[str],
                     top_k: int) -> None:
     """Print the memory's strategic recall for a query (case-based reasoning)."""
@@ -318,6 +404,52 @@ if click is not None:
         """Query local case-based memory for relevant weakness patterns."""
         run_intel_query(query, output_dir, domain, top_k)
 
+    @cli.command("fuzz")
+    @click.option("--mode", type=click.Choice(["web", "binary", "contract"]),
+                  default="web", show_default=True, help="Fuzzing domain.")
+    @click.option("--output", "output_dir", default="./sternuke-out", show_default=True)
+    @click.option("-v", "--verbose", is_flag=True, default=False)
+    # web
+    @click.option("--target", default=None, help="[web] URL with parameters to mutate.")
+    @click.option("--method", default="GET", show_default=True, help="[web] HTTP method.")
+    @click.option("--body", default=None, help="[web] form body to mutate.")
+    @click.option("--payloads-per-param", default=40, show_default=True)
+    @click.option("--concurrency", default=20, show_default=True)
+    @click.option("--rps", default=25.0, show_default=True)
+    @click.option("--allow-remote", is_flag=True, default=False,
+                  help="Explicitly permit a non-local target (you accept authz).")
+    # binary
+    @click.option("--binary", default=None, help="[binary] local executable to fuzz.")
+    @click.option("--input-mode", type=click.Choice(["stdin", "file"]), default="stdin")
+    @click.option("--arg", "prog_args", multiple=True,
+                  help="[binary] target arg; use @@ for the input file (file mode).")
+    @click.option("--max-execs", default=2000, show_default=True)
+    @click.option("--seconds", default=60.0, show_default=True)
+    @click.option("--seed-dir", default=None, help="[binary] directory of seed inputs.")
+    # contract
+    @click.option("--rpc", default=None, help="[contract] local JSON-RPC endpoint.")
+    @click.option("--address", default=None, help="[contract] deployed contract address.")
+    @click.option("--sig", "signatures", multiple=True,
+                  help="[contract] function signature, e.g. 'withdraw(uint256)'.")
+    @click.option("--abi", "abi_path", default=None, help="[contract] JSON ABI file.")
+    @click.option("--sender", default=None, help="[contract] sender address.")
+    @click.option("--max-calls", default=400, show_default=True)
+    def fuzz_cmd(mode, output_dir, verbose, target, method, body, payloads_per_param,
+                 concurrency, rps, allow_remote, binary, input_mode, prog_args,
+                 max_execs, seconds, seed_dir, rpc, address, signatures, abi_path,
+                 sender, max_calls):
+        """Run the payload-mutation fuzzer (web | binary | contract)."""
+        findings = asyncio.run(run_fuzz(
+            mode=mode, output_dir=output_dir, verbose=verbose, target=target,
+            method=method, body=body, payloads_per_param=payloads_per_param,
+            concurrency=concurrency, rps=rps, allow_remote=allow_remote,
+            binary=binary, input_mode=input_mode, prog_args=list(prog_args),
+            max_execs=max_execs, seconds=seconds, seed_dir=seed_dir, rpc=rpc,
+            address=address, signatures=list(signatures), abi_path=abi_path,
+            sender=sender, max_calls=max_calls,
+        ))
+        print_summary(findings)
+
     @cli.command("gui")
     def gui_cmd():
         """Launch the graphical interface."""
@@ -325,8 +457,12 @@ if click is not None:
         launch_gui()
 
     def main(argv: Optional[List[str]] = None) -> int:
-        cli.main(args=argv, standalone_mode=False)
-        return 0
+        try:
+            cli.main(args=argv, standalone_mode=False)
+            return 0
+        except _CLEAN_ERRORS as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
 else:  # ------------------------------------------------------------------
     # argparse fallback (standard library only)
@@ -368,6 +504,31 @@ else:  # ------------------------------------------------------------------
         intel.add_argument("--output", dest="output_dir", default="./sternuke-out")
         intel.add_argument("--top-k", dest="top_k", type=int, default=5)
 
+        fz = sub.add_parser("fuzz", help="Run the payload-mutation fuzzer.")
+        fz.add_argument("--mode", choices=["web", "binary", "contract"], default="web")
+        fz.add_argument("--output", dest="output_dir", default="./sternuke-out")
+        fz.add_argument("-v", "--verbose", action="store_true")
+        fz.add_argument("--target", default=None)
+        fz.add_argument("--method", default="GET")
+        fz.add_argument("--body", default=None)
+        fz.add_argument("--payloads-per-param", dest="payloads_per_param", type=int, default=40)
+        fz.add_argument("--concurrency", type=int, default=20)
+        fz.add_argument("--rps", type=float, default=25.0)
+        fz.add_argument("--allow-remote", dest="allow_remote", action="store_true")
+        fz.add_argument("--binary", default=None)
+        fz.add_argument("--input-mode", dest="input_mode", choices=["stdin", "file"],
+                        default="stdin")
+        fz.add_argument("--arg", dest="prog_args", action="append", default=[])
+        fz.add_argument("--max-execs", dest="max_execs", type=int, default=2000)
+        fz.add_argument("--seconds", type=float, default=60.0)
+        fz.add_argument("--seed-dir", dest="seed_dir", default=None)
+        fz.add_argument("--rpc", default=None)
+        fz.add_argument("--address", default=None)
+        fz.add_argument("--sig", dest="signatures", action="append", default=[])
+        fz.add_argument("--abi", dest="abi_path", default=None)
+        fz.add_argument("--sender", default=None)
+        fz.add_argument("--max-calls", dest="max_calls", type=int, default=400)
+
         sub.add_parser("gui", help="Launch the graphical interface.")
         return parser
 
@@ -380,6 +541,19 @@ else:  # ------------------------------------------------------------------
             return 0
         if args.command == "intel":
             run_intel_query(args.query, args.output_dir, args.domain, args.top_k)
+            return 0
+        if args.command == "fuzz":
+            findings = asyncio.run(run_fuzz(
+                mode=args.mode, output_dir=args.output_dir, verbose=args.verbose,
+                target=args.target, method=args.method, body=args.body,
+                payloads_per_param=args.payloads_per_param, concurrency=args.concurrency,
+                rps=args.rps, allow_remote=args.allow_remote, binary=args.binary,
+                input_mode=args.input_mode, prog_args=args.prog_args,
+                max_execs=args.max_execs, seconds=args.seconds, seed_dir=args.seed_dir,
+                rpc=args.rpc, address=args.address, signatures=args.signatures,
+                abi_path=args.abi_path, sender=args.sender, max_calls=args.max_calls,
+            ))
+            print_summary(findings)
             return 0
         if args.command == "chain":
             parsed = dict(p.split("=", 1) for p in args.params if "=" in p) \
@@ -399,6 +573,15 @@ else:  # ------------------------------------------------------------------
         ))
         print_summary(findings)
         return 0
+
+    _orig_main = main
+
+    def main(argv: Optional[List[str]] = None) -> int:  # noqa: F811 - wrap for clean errors
+        try:
+            return _orig_main(argv)
+        except _CLEAN_ERRORS as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

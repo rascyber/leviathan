@@ -42,8 +42,12 @@ from .memory import (
 from .cognitive import (
     BusinessLogicMutator, CallGraphNode, CrossContractAnalyzer, ExternalCall,
 )
+from .fuzzing import (
+    AbiFunction, BinaryFuzzer, ByteMutator, ContractFuzzer, Corpus, FuzzBudget,
+    ScopeError, TypedMutator, WebFuzzer, encode_call, keccak256,
+)
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # engine
@@ -62,5 +66,9 @@ __all__ = [
     # cognitive
     "BusinessLogicMutator", "CallGraphNode", "CrossContractAnalyzer",
     "ExternalCall",
+    # fuzzing
+    "AbiFunction", "BinaryFuzzer", "ByteMutator", "ContractFuzzer", "Corpus",
+    "FuzzBudget", "ScopeError", "TypedMutator", "WebFuzzer", "encode_call",
+    "keccak256",
     "__version__",
 ]
