@@ -500,3 +500,327 @@ class StatefulChainEngine:
             )
         except Exception:  # noqa: BLE001 - memory is best-effort
             pass
+
+
+# ===========================================================================
+# JSONPath-lite (dependency-free) for response extraction
+# ===========================================================================
+_JPATH_TOKEN = re.compile(r"([A-Za-z_][\w-]*)|\[(\d+)\]|\['([^']*)'\]|\[\"([^\"]*)\"\]")
+
+
+def jsonpath_get(data: Any, path: str) -> Optional[Any]:
+    """Resolve a dotted/bracketed path (e.g. ``data.items[0].token``).
+
+    Supports object keys (dot or bracket notation) and numeric array indices.
+    A leading ``$`` or ``$.`` is optional. Returns ``None`` if any segment
+    cannot be resolved.
+    """
+    if path.startswith("$"):
+        path = path[1:]
+    path = path.lstrip(".")
+    cursor: Any = data
+    for m in _JPATH_TOKEN.finditer(path):
+        key = m.group(1) or m.group(3) or m.group(4)
+        idx = m.group(2)
+        if idx is not None:
+            if isinstance(cursor, (list, tuple)) and int(idx) < len(cursor):
+                cursor = cursor[int(idx)]
+            else:
+                return None
+        else:
+            if isinstance(cursor, dict) and key in cursor:
+                cursor = cursor[key]
+            else:
+                return None
+    return cursor
+
+
+# ===========================================================================
+# Session vault
+# ===========================================================================
+class SessionStateManager:
+    """In-memory session vault for a multi-step assessment.
+
+    Tracks the credential material that stateful web flows depend on - cookies,
+    JWTs, anti-CSRF tokens and dynamic nonces - alongside arbitrary captured
+    variables. It merges the right material into outgoing requests and resolves
+    ``{{variable}}`` templates from a single flat context.
+
+    Everything lives in process memory only; nothing is written to disk or sent
+    anywhere by this class.
+    """
+
+    def __init__(self) -> None:
+        self.cookies: Dict[str, str] = {}
+        self.jwts: Dict[str, str] = {}
+        self.csrf_tokens: Dict[str, str] = {}
+        self.nonces: Dict[str, int] = {}
+        self.variables: Dict[str, str] = {}
+
+    # -- credential setters --------------------------------------------------
+    def set_cookie(self, name: str, value: str) -> None:
+        self.cookies[name] = value
+
+    def set_jwt(self, name: str, token: str) -> None:
+        self.jwts[name] = token
+        self.variables[name] = token
+
+    def set_csrf(self, token: str, *, name: str = "csrf") -> None:
+        self.csrf_tokens[name] = token
+        self.variables[name] = token
+
+    def set_nonce(self, name: str, value: int) -> None:
+        self.nonces[name] = int(value)
+
+    def next_nonce(self, name: str) -> int:
+        """Increment and return a monotonic nonce (defaults to starting at 0)."""
+        self.nonces[name] = self.nonces.get(name, -1) + 1
+        self.variables[name] = str(self.nonces[name])
+        return self.nonces[name]
+
+    def put(self, key: str, value: str) -> None:
+        self.variables[key] = value
+
+    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        return self.variables.get(key, default)
+
+    # -- ingestion from responses -------------------------------------------
+    def ingest_response(self, resp: HttpResponse) -> None:
+        """Absorb Set-Cookie headers and any bearer token echoed back."""
+        for header_name, header_value in resp.headers.items():
+            if header_name.lower() == "set-cookie":
+                for part in header_value.split(","):
+                    m = re.match(r"\s*([^=;]+)=([^;]+)", part)
+                    if m:
+                        self.set_cookie(m.group(1).strip(), m.group(2).strip())
+
+    @staticmethod
+    def decode_jwt(token: str) -> Dict[str, Any]:
+        """Decode a JWT's header+payload WITHOUT verifying the signature.
+
+        For inspection only (e.g. reading claims/algorithm during assessment);
+        never treat the result as authenticated.
+        """
+        import base64
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+
+        def _b64(seg: str) -> Dict[str, Any]:
+            pad = "=" * (-len(seg) % 4)
+            try:
+                return json.loads(base64.urlsafe_b64decode(seg + pad))
+            except (ValueError, json.JSONDecodeError):
+                return {}
+
+        return {"header": _b64(parts[0]), "payload": _b64(parts[1])}
+
+    # -- request material ----------------------------------------------------
+    def cookie_header(self) -> Dict[str, str]:
+        if not self.cookies:
+            return {}
+        return {"Cookie": "; ".join(f"{k}={v}" for k, v in self.cookies.items())}
+
+    def context(self) -> Dict[str, str]:
+        """Flat name->value map used for ``{{template}}`` resolution."""
+        ctx: Dict[str, str] = {}
+        ctx.update({k: str(v) for k, v in self.nonces.items()})
+        ctx.update(self.cookies)
+        ctx.update(self.csrf_tokens)
+        ctx.update(self.jwts)
+        ctx.update(self.variables)
+        return ctx
+
+    def resolve(self, template: str) -> str:
+        """Substitute ``{{var}}`` placeholders from the vault context."""
+        ctx = self.context()
+        return _TEMPLATE_RE.sub(lambda m: ctx.get(m.group(1).split(".")[0], ""), template)
+
+    def to_session_state(self) -> SessionState:
+        """Export as a :class:`SessionState` for the StatefulChainEngine."""
+        return SessionState(variables=dict(self.context()), cookies=dict(self.cookies))
+
+
+# ===========================================================================
+# Dependency-graph execution engine
+# ===========================================================================
+@dataclass
+class ExtractionRule:
+    """Captures a variable from a response into the session vault.
+
+    ``source`` is one of ``body`` / ``header`` / ``status``. ``method`` is
+    ``regex`` or ``jsonpath`` (``jsonpath`` applies to a JSON body). ``expr`` is
+    the pattern/path; for a header source it is the header name.
+    """
+
+    name: str
+    source: str = "body"
+    method: str = "regex"
+    expr: str = ""
+
+    def apply(self, resp: HttpResponse) -> Optional[str]:
+        if self.source == "status":
+            return str(resp.status)
+        if self.source == "header":
+            for k, v in resp.headers.items():
+                if k.lower() == self.expr.lower():
+                    return v
+            return None
+        # body
+        if self.method == "jsonpath":
+            try:
+                data = json.loads(resp.body)
+            except (json.JSONDecodeError, ValueError):
+                return None
+            value = jsonpath_get(data, self.expr)
+            return None if value is None else str(value)
+        m = re.search(self.expr, resp.body, re.DOTALL)
+        if not m:
+            return None
+        return m.group(1) if m.groups() else m.group(0)
+
+
+@dataclass
+class RequestSpec:
+    """A single request node in a dependency graph.
+
+    Template fields may reference vault variables with ``{{name}}``. ``inject``
+    maps a variable name to an explicit target: ``header:X-CSRF-Token``,
+    ``body:field`` (form/query style body), or ``path`` (substituted via the
+    ``{{name}}`` placeholder already present in ``path``).
+    """
+
+    name: str
+    method: str = "GET"
+    path: str = "/"
+    headers: Dict[str, str] = field(default_factory=dict)
+    body: Optional[str] = None
+    extract: List[ExtractionRule] = field(default_factory=list)
+    inject: Dict[str, str] = field(default_factory=dict)
+
+    def produced(self) -> List[str]:
+        return [e.name for e in self.extract]
+
+    def consumed(self) -> List[str]:
+        blob = " ".join([self.path, self.body or "", *self.headers.values(),
+                         *self.inject.keys()])
+        return sorted({m.group(1).split(".")[0] for m in _TEMPLATE_RE.finditer(blob)}
+                      | set(self.inject.keys()))
+
+
+@dataclass
+class GraphExecutionResult:
+    order: List[str] = field(default_factory=list)
+    responses: Dict[str, Optional[HttpResponse]] = field(default_factory=dict)
+    captured: Dict[str, str] = field(default_factory=dict)
+
+
+class DependencyGraphEngine:
+    """Parses a response sequence, extracts variables, and injects them forward.
+
+    Given a set of :class:`RequestSpec` nodes, the engine:
+
+    1. topologically orders nodes so producers of a variable run before their
+       consumers (a variable is *produced* by a node's :class:`ExtractionRule`
+       and *consumed* via ``{{var}}`` templates or explicit ``inject`` targets);
+    2. resolves each node's request against the live :class:`SessionStateManager`
+       vault (headers, body and path variables);
+    3. executes it over the throttled :class:`AsyncHttpClient`;
+    4. extracts variables from the response back into the vault for the next
+       layer.
+
+    It works equally well over a *pre-recorded* response sequence (offline
+    parsing) via :meth:`extract_sequence`.
+    """
+
+    def __init__(self, vault: Optional[SessionStateManager] = None,
+                 logger: Optional[Logger] = None) -> None:
+        self.vault = vault or SessionStateManager()
+        self._log = logger or (lambda msg: None)
+
+    # -- ordering ------------------------------------------------------------
+    def order(self, specs: Sequence[RequestSpec]) -> List[RequestSpec]:
+        producer: Dict[str, int] = {}
+        for idx, spec in enumerate(specs):
+            for var in spec.produced():
+                producer[var] = idx
+        indeg = [0] * len(specs)
+        adj: Dict[int, List[int]] = {i: [] for i in range(len(specs))}
+        for idx, spec in enumerate(specs):
+            for var in spec.consumed():
+                src = producer.get(var)
+                if src is not None and src != idx:
+                    adj[src].append(idx)
+                    indeg[idx] += 1
+        ready = [i for i in range(len(specs)) if indeg[i] == 0]
+        out: List[int] = []
+        while ready:
+            n = ready.pop(0)
+            out.append(n)
+            for nxt in adj[n]:
+                indeg[nxt] -= 1
+                if indeg[nxt] == 0:
+                    ready.append(nxt)
+        if len(out) != len(specs):  # cycle: preserve declaration order
+            out.extend(i for i in range(len(specs)) if i not in out)
+        return [specs[i] for i in out]
+
+    # -- request resolution --------------------------------------------------
+    def resolve_request(self, base: str, spec: RequestSpec
+                        ) -> Tuple[str, Dict[str, str], Optional[str]]:
+        """Resolve a spec into a concrete (url, headers, body) using the vault."""
+        path = self.vault.resolve(spec.path)
+        headers = {k: self.vault.resolve(v) for k, v in spec.headers.items()}
+        headers.update(self.vault.cookie_header())
+        body = self.vault.resolve(spec.body) if spec.body is not None else None
+
+        # Explicit injections into headers / body / path.
+        for var, target in spec.inject.items():
+            value = self.vault.get(var, "")
+            if target.startswith("header:"):
+                headers[target.split(":", 1)[1]] = value or ""
+            elif target.startswith("body:"):
+                field_name = target.split(":", 1)[1]
+                pair = f"{field_name}={value}"
+                body = pair if not body else (body + "&" + pair)
+            elif target == "path":
+                path = path.replace("{{" + var + "}}", value or "")
+
+        url = base.rstrip("/") + (path if path.startswith("/") else "/" + path)
+        return url, headers, body
+
+    # -- extraction ----------------------------------------------------------
+    def extract_into_vault(self, spec: RequestSpec, resp: HttpResponse) -> Dict[str, str]:
+        captured: Dict[str, str] = {}
+        self.vault.ingest_response(resp)
+        for rule in spec.extract:
+            value = rule.apply(resp)
+            if value is not None:
+                self.vault.put(rule.name, value)
+                captured[rule.name] = value
+                self._log(f"[depgraph] captured {rule.name}={value[:48]!r} "
+                          f"from '{spec.name}'")
+        return captured
+
+    def extract_sequence(self, pairs: Sequence[Tuple[RequestSpec, HttpResponse]]
+                         ) -> Dict[str, str]:
+        """Parse a pre-recorded (spec, response) sequence into the vault."""
+        captured: Dict[str, str] = {}
+        for spec, resp in pairs:
+            captured.update(self.extract_into_vault(spec, resp))
+        return captured
+
+    # -- live execution ------------------------------------------------------
+    async def execute(self, base: str, specs: Sequence[RequestSpec],
+                      client: "AsyncHttpClient") -> GraphExecutionResult:
+        """Run the ordered graph live, threading the vault through each node."""
+        result = GraphExecutionResult()
+        for spec in self.order(specs):
+            url, headers, body = self.resolve_request(base, spec)
+            self._log(f"[depgraph] -> {spec.name}: {spec.method} {url}")
+            resp = await client.request(spec.method, url, headers=headers, data=body)
+            result.order.append(spec.name)
+            result.responses[spec.name] = resp
+            if resp is not None:
+                result.captured.update(self.extract_into_vault(spec, resp))
+        return result

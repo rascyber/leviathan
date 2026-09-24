@@ -46,8 +46,21 @@ from .fuzzing import (
     AbiFunction, BinaryFuzzer, ByteMutator, ContractFuzzer, Corpus, FuzzBudget,
     ScopeError, TypedMutator, WebFuzzer, encode_call, keccak256,
 )
+from .fuzzing.abi_advanced import (
+    AbiType, decode as abi_decode, encode as abi_encode,
+    encode_call as abi_encode_call, parse_type,
+)
+from .state_engine import (
+    DependencyGraphEngine, ExtractionRule, RequestSpec, SessionStateManager,
+    jsonpath_get,
+)
+from .intelligence import (
+    AnomalyContext, Advisory, CVSSCalculator, CVSSVector, HackerOneReporter,
+    IntelligenceEngine, NucleiTemplateWriter, SeverityMapper,
+)
+from .assets import Asset, AssetParser, AssetType
 
-__version__ = "1.2.0"
+__version__ = "2.0.0"
 
 __all__ = [
     # engine
@@ -70,5 +83,16 @@ __all__ = [
     "AbiFunction", "BinaryFuzzer", "ByteMutator", "ContractFuzzer", "Corpus",
     "FuzzBudget", "ScopeError", "TypedMutator", "WebFuzzer", "encode_call",
     "keccak256",
+    # advanced ABI codec
+    "AbiType", "abi_decode", "abi_encode", "abi_encode_call", "parse_type",
+    # state engine (v2)
+    "DependencyGraphEngine", "ExtractionRule", "RequestSpec",
+    "SessionStateManager", "jsonpath_get",
+    # intelligence
+    "AnomalyContext", "Advisory", "CVSSCalculator", "CVSSVector",
+    "HackerOneReporter", "IntelligenceEngine", "NucleiTemplateWriter",
+    "SeverityMapper",
+    # assets
+    "Asset", "AssetParser", "AssetType",
     "__version__",
 ]

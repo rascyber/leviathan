@@ -101,6 +101,46 @@ python -m sternuke.main fuzz --mode contract --rpc http://127.0.0.1:8545 \
 
 Crashes are written to `<output>/crashes/`; all findings land in `findings.json`.
 
+## Autonomous orchestration (v2.0)
+
+v2 turns sternuke into a fully autonomous, multi-asset assessment agent — still
+100% local (no SaaS keys, no cloud).
+
+* **Session vault + dependency graph** (`state_engine.py`): `SessionStateManager`
+  holds cookies, JWTs, anti-CSRF tokens and nonces in memory; `DependencyGraphEngine`
+  parses a response sequence, extracts variables via **regex or JSONPath**, and
+  injects them into the next request's headers, body or path — auto-ordering
+  producers before consumers.
+* **Full nested ABI codec** (`fuzzing/abi_advanced.py`): dependency-free encode/
+  decode for multi-dimensional arrays (`uint256[][]`), static/dynamic tuples and
+  nested tuples-in-arrays, with canonical EVM head/tail offsets (validated
+  against the official Solidity ABI spec vector).
+* **Intelligence pipeline** (`intelligence.py`): ingests an anomaly (raw
+  request/response or contract state drift), computes a **deterministic CVSS
+  v3.1** base score + vector, and synthesizes a valid **Nuclei YAML** template
+  plus a **HackerOne-ready Markdown** report (Executive Summary, Technical
+  Deep-Dive, Steps to Reproduce, Impact, Remediation), grouped by severity.
+  Prose is drafted by the local model when reachable, else by deterministic
+  templates.
+* **Asset ingestion** (`assets.py`): classifies pasted text or `.txt`/`.csv`
+  scope files into wildcard domains, FQDNs, IPv4/IPv6, API endpoints and
+  contract addresses.
+* **Orchestration dashboard** (`gui.py`): an Orchestration tab with a scope
+  wizard (paste or upload), a live asset preview, and checkboxes for **Web
+  Stateful Chain**, **Advanced ABI Contract Fuzzing**, and **AI Template
+  Generation Loop**.
+
+### Orchestration command
+
+```bash
+python -m sternuke.main orchestrate --scope-file scope.csv \
+    --mode web_chain --mode ai_templates --output ./sternuke-out
+```
+
+Advisories are written to `<output>/advisories/<severity>/<slug>.md` and `.yaml`.
+Programmatic entry: `sternuke.main.orchestrate([...targets], modes=[...])`.
+All orchestration modes stay local-by-default (`--allow-remote` to opt in).
+
 ## Installation
 
 ```bash
