@@ -156,13 +156,16 @@ class AsyncHttpClient:
     and per-host concurrency limits declared by :class:`ScanPolicy`.
     """
 
-    def __init__(self, policy: ScanPolicy, logger: Optional[Callable[[str], None]] = None):
+    def __init__(self, policy: ScanPolicy, logger: Optional[Callable[[str], None]] = None,
+                 extra_headers: Optional[Dict[str, str]] = None):
         if aiohttp is None:
             raise RuntimeError(
                 "aiohttp is required for web scanning. Install with: pip install aiohttp"
             )
         self.policy = policy
         self._log = logger or (lambda msg: None)
+        # Headers merged into every request (e.g. an authenticated session cookie).
+        self._extra_headers: Dict[str, str] = dict(extra_headers or {})
         self._sem = asyncio.Semaphore(policy.max_concurrency)
         self._bucket = _TokenBucket(policy.requests_per_second)
         self._host_sems: Dict[str, asyncio.Semaphore] = {}
@@ -211,6 +214,11 @@ class AsyncHttpClient:
             self._log("[policy] max request ceiling reached; skipping further requests")
             return None
 
+        # Merge default (session) headers with per-request headers; the latter win.
+        merged_headers = dict(self._extra_headers)
+        if headers:
+            merged_headers.update(headers)
+
         host_sem = self._host_semaphore(host)
         async with self._sem, host_sem:
             for attempt in range(self.policy.max_retries + 1):
@@ -220,7 +228,7 @@ class AsyncHttpClient:
                     self._request_count += 1
                     assert self._session is not None
                     async with self._session.request(
-                        method.upper(), url, headers=headers, data=data,
+                        method.upper(), url, headers=(merged_headers or None), data=data,
                         allow_redirects=True,
                     ) as resp:
                         body = await resp.text(errors="replace")
@@ -428,10 +436,13 @@ class WebScanner:
     """
 
     def __init__(self, policy: ScanPolicy, rule_engine: RuleEngine,
-                 logger: Optional[Callable[[str], None]] = None):
+                 logger: Optional[Callable[[str], None]] = None,
+                 extra_headers: Optional[Dict[str, str]] = None):
         self.policy = policy
         self.rules = rule_engine
         self._log = logger or (lambda msg: None)
+        # Session headers (e.g. auth cookie) applied to every request.
+        self.extra_headers: Dict[str, str] = dict(extra_headers or {})
 
     # -- request template expansion ------------------------------------------
     @staticmethod
@@ -508,7 +519,8 @@ class WebScanner:
         targets = list(dict.fromkeys(targets))  # de-dupe, keep order
         self._log(f"[scan] starting web assessment of {len(targets)} target(s), "
                   f"{len(self.rules.rules)} rule(s)")
-        async with AsyncHttpClient(self.policy, self._log) as client:
+        async with AsyncHttpClient(self.policy, self._log,
+                                   extra_headers=self.extra_headers) as client:
             for target in targets:
                 self._log(f"[scan] target: {target}")
                 await self.scan_target(client, target, sink)

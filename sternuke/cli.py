@@ -58,6 +58,29 @@ def _console_logger(verbose: bool):
     return log
 
 
+def parse_headers(items: Optional[List[str]] = None,
+                  cookie: Optional[str] = None) -> dict:
+    """Build a headers dict from ``Name: value`` lines and an optional cookie.
+
+    Accepts a list of ``"Name: value"`` strings (or newline-separated text) and
+    a raw ``cookie`` string (e.g. ``"PHPSESSID=abc; security=low"``). Used to
+    run authenticated scans (paste your session cookie).
+    """
+    headers: dict = {}
+    raw_items: List[str] = []
+    for entry in items or []:
+        raw_items.extend(entry.splitlines() if "\n" in entry else [entry])
+    for line in raw_items:
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        name, _, value = line.partition(":")
+        headers[name.strip()] = value.strip()
+    if cookie:
+        headers["Cookie"] = cookie.strip()
+    return headers
+
+
 def _prepare_output_dir(output_dir: str, log: Callable[[str], None]) -> str:
     """Ensure ``output_dir`` exists and is writable; fall back to a temp dir.
 
@@ -99,12 +122,14 @@ async def run_assessment(
     rps: float,
     verbose: bool,
     rule_format: str = "yaml",
+    headers: Optional[dict] = None,
     log_sink: Optional[Callable[[str], None]] = None,
 ) -> List[Finding]:
     """Run a full assessment and return the findings list.
 
     This is the single seam the CLI, GUI and :mod:`sternuke.main` all call.
     ``log_sink``, when provided, receives every log line (used by the web UI).
+    ``headers`` (e.g. an authenticated session cookie) are sent on every request.
     """
     log = log_sink or _console_logger(verbose)
     output_dir = _prepare_output_dir(output_dir, log)
@@ -173,7 +198,8 @@ async def run_assessment(
             offline = agent._offline_web_rules()  # noqa: SLF001
             path = agent._write_rules(offline, output_dir, rule_format, prefix="web")
             rule_engine.load_file(path)
-        scanner = WebScanner(policy, rule_engine, logger=log)
+        scanner = WebScanner(policy, rule_engine, logger=log,
+                             extra_headers=headers or {})
         findings = await scanner.scan([target])
     else:
         raise ValueError(f"Unknown mode: {mode!r} (expected 'web' or 'blockchain')")
@@ -194,12 +220,14 @@ async def run_business_logic_chain(
     concurrency: int,
     rps: float,
     verbose: bool,
+    headers: Optional[dict] = None,
 ) -> List[Finding]:
     """Plan and execute a stateful business-logic test chain against one endpoint.
 
     Exercises the cognitive planner, the dependency-ordered stateful engine and
     the bounded self-correction loop together. Intended for authorised testing
-    of an endpoint you control.
+    of an endpoint you control. ``headers`` (e.g. a session cookie) authenticate
+    every request.
     """
     from .engine import AsyncHttpClient
     from .state_engine import StatefulChainEngine
@@ -212,12 +240,13 @@ async def run_business_logic_chain(
     memory = build_default_memory(os.path.join(output_dir, "memory.json"), logger=log)
 
     planner = BusinessLogicMutator(logger=log)
-    steps = planner.plan(path, params, method="POST")
+    steps = planner.plan(path, params, method="POST", auth_header=headers or {})
     engine = StatefulChainEngine(policy, model_client, logger=log)
 
-    async with AsyncHttpClient(policy, log) as client:
+    async with AsyncHttpClient(policy, log, extra_headers=headers or {}) as client:
         result = await engine.run_chain(target, steps, client,
-                                        name="business-logic", memory=memory)
+                                        name="business-logic",
+                                        extra_headers=headers or {}, memory=memory)
     memory.save()
     _dump_json(os.path.join(output_dir, "chain-steps.json"),
                [s.__dict__ for s in result.steps])
@@ -238,6 +267,7 @@ async def run_fuzz(
     concurrency: int = 20,
     rps: float = 25.0,
     allow_remote: bool = False,
+    headers: Optional[dict] = None,
     # binary
     binary: Optional[str] = None,
     input_mode: str = "stdin",
@@ -270,7 +300,7 @@ async def run_fuzz(
             ScanPolicy(max_concurrency=concurrency, requests_per_second=rps),
             budget=WebFuzzBudget(payloads_per_param=payloads_per_param),
             allow_remote=allow_remote, logger=log)
-        report = await fuzzer.fuzz(target, method=method, body=body)
+        report = await fuzzer.fuzz(target, method=method, body=body, headers=headers or {})
         findings = report.findings
 
     elif mode == "binary":
@@ -319,9 +349,16 @@ async def run_orchestration(
     verbose: bool,
     allow_remote: bool = False,
     rpc_url: str = "http://localhost:11434/v1",
+    chain_path: str = "/api/v1/cart/checkout",
+    chain_params: Optional[dict] = None,
+    headers: Optional[dict] = None,
     log_sink: Optional[Callable[[str], None]] = None,
 ) -> List[Finding]:
     """Run selected modes across a list of parsed assets and write advisories.
+
+    ``chain_path``/``chain_params`` configure the stateful business-logic chain's
+    target endpoint (defaults to a demo cart checkout). ``headers`` (e.g. a
+    session cookie) authenticate every request.
 
     ``modes`` may include: ``web_chain`` (stateful business-logic chain over web
     assets), ``abi_fuzz`` (advanced ABI contract fuzzing over contract-address
@@ -358,10 +395,12 @@ async def run_orchestration(
             except ScopeError as exc:
                 log(f"[orchestrate] skip {base}: {exc}")
                 continue
-            steps = planner.plan("/api/v1/cart/checkout", {"quantity": "1", "item_id": "9"})
-            async with AsyncHttpClient(policy, log) as client:
+            steps = planner.plan(chain_path, chain_params or {"quantity": "1", "item_id": "9"},
+                                 auth_header=headers or {})
+            async with AsyncHttpClient(policy, log, extra_headers=headers or {}) as client:
                 result = await chain_engine.run_chain(base, steps, client,
                                                       name=f"chain:{asset.value}",
+                                                      extra_headers=headers or {},
                                                       memory=memory)
             findings.extend(result.findings)
 
@@ -485,14 +524,19 @@ if click is not None:
     @click.option("--rps", default=25.0, show_default=True,
                   help="Global requests-per-second cap.")
     @click.option("--rule-format", type=click.Choice(["yaml", "json"]), default="yaml")
+    @click.option("--header", "header_lines", multiple=True, metavar="'Name: value'",
+                  help="Extra request header (repeatable), e.g. --header 'Cookie: PHPSESSID=..'.")
+    @click.option("--cookie", default=None,
+                  help="Session cookie string, e.g. 'PHPSESSID=abc; security=low'.")
     @click.option("-v", "--verbose", is_flag=True, default=False)
     def scan_cmd(target, mode, model, base_url, rules_path, output_dir, ai,
-                 concurrency, rps, rule_format, verbose):
+                 concurrency, rps, rule_format, header_lines, cookie, verbose):
         """Run an assessment against a single target."""
         findings = asyncio.run(run_assessment(
             target=target, mode=mode, rules_path=rules_path, output_dir=output_dir,
             use_ai=ai, model=model, base_url=base_url, concurrency=concurrency,
             rps=rps, verbose=verbose, rule_format=rule_format,
+            headers=parse_headers(list(header_lines), cookie),
         ))
         print_summary(findings)
 
@@ -507,15 +551,17 @@ if click is not None:
     @click.option("--output", "output_dir", default="./sternuke-out", show_default=True)
     @click.option("--concurrency", default=10, show_default=True)
     @click.option("--rps", default=15.0, show_default=True)
+    @click.option("--header", "header_lines", multiple=True, metavar="'Name: value'")
+    @click.option("--cookie", default=None, help="Session cookie string.")
     @click.option("-v", "--verbose", is_flag=True, default=False)
     def chain_cmd(target, path, params, model, base_url, output_dir,
-                  concurrency, rps, verbose):
+                  concurrency, rps, header_lines, cookie, verbose):
         """Run a stateful business-logic test chain against one endpoint."""
         parsed = dict(p.split("=", 1) for p in params if "=" in p) or {"quantity": "1"}
         findings = asyncio.run(run_business_logic_chain(
             target=target, path=path, params=parsed, output_dir=output_dir,
             model=model, base_url=base_url, concurrency=concurrency, rps=rps,
-            verbose=verbose,
+            verbose=verbose, headers=parse_headers(list(header_lines), cookie),
         ))
         print_summary(findings)
 
@@ -542,6 +588,9 @@ if click is not None:
     @click.option("--rps", default=25.0, show_default=True)
     @click.option("--allow-remote", is_flag=True, default=False,
                   help="Explicitly permit a non-local target (you accept authz).")
+    @click.option("--header", "header_lines", multiple=True, metavar="'Name: value'",
+                  help="[web] extra request header (repeatable).")
+    @click.option("--cookie", default=None, help="[web] session cookie string.")
     # binary
     @click.option("--binary", default=None, help="[binary] local executable to fuzz.")
     @click.option("--input-mode", type=click.Choice(["stdin", "file"]), default="stdin")
@@ -559,14 +608,15 @@ if click is not None:
     @click.option("--sender", default=None, help="[contract] sender address.")
     @click.option("--max-calls", default=400, show_default=True)
     def fuzz_cmd(mode, output_dir, verbose, target, method, body, payloads_per_param,
-                 concurrency, rps, allow_remote, binary, input_mode, prog_args,
-                 max_execs, seconds, seed_dir, rpc, address, signatures, abi_path,
-                 sender, max_calls):
+                 concurrency, rps, allow_remote, header_lines, cookie, binary,
+                 input_mode, prog_args, max_execs, seconds, seed_dir, rpc, address,
+                 signatures, abi_path, sender, max_calls):
         """Run the payload-mutation fuzzer (web | binary | contract)."""
         findings = asyncio.run(run_fuzz(
             mode=mode, output_dir=output_dir, verbose=verbose, target=target,
             method=method, body=body, payloads_per_param=payloads_per_param,
             concurrency=concurrency, rps=rps, allow_remote=allow_remote,
+            headers=parse_headers(list(header_lines), cookie),
             binary=binary, input_mode=input_mode, prog_args=list(prog_args),
             max_execs=max_execs, seconds=seconds, seed_dir=seed_dir, rpc=rpc,
             address=address, signatures=list(signatures), abi_path=abi_path,
@@ -590,9 +640,17 @@ if click is not None:
     @click.option("--concurrency", default=15, show_default=True)
     @click.option("--rps", default=15.0, show_default=True)
     @click.option("--allow-remote", is_flag=True, default=False)
+    @click.option("--chain-path", default="/api/v1/cart/checkout", show_default=True,
+                  help="[web_chain] endpoint path to probe.")
+    @click.option("--param", "chain_params", multiple=True, metavar="KEY=VALUE",
+                  help="[web_chain] baseline parameter (repeatable).")
+    @click.option("--header", "header_lines", multiple=True, metavar="'Name: value'",
+                  help="Extra request header (repeatable).")
+    @click.option("--cookie", default=None, help="Session cookie string.")
     @click.option("-v", "--verbose", is_flag=True, default=False)
     def orchestrate_cmd(scope_file, targets, modes, model, base_url, rpc_url,
-                        output_dir, concurrency, rps, allow_remote, verbose):
+                        output_dir, concurrency, rps, allow_remote, chain_path,
+                        chain_params, header_lines, cookie, verbose):
         """Ingest a scope file/targets and run selected modes across all assets."""
         from .assets import AssetParser
         parser = AssetParser()
@@ -603,11 +661,13 @@ if click is not None:
         else:
             raise ValueError("provide --scope-file or --targets")
         selected = list(modes) or ["web_chain", "abi_fuzz", "ai_templates"]
+        params = dict(p.split("=", 1) for p in chain_params if "=" in p) or None
         print(f"Parsed {len(assets)} asset(s): {parser.summary(assets)}")
         findings = asyncio.run(run_orchestration(
             assets=assets, modes=selected, output_dir=output_dir, model=model,
             base_url=base_url, rpc_url=rpc_url, concurrency=concurrency, rps=rps,
-            verbose=verbose, allow_remote=allow_remote,
+            verbose=verbose, allow_remote=allow_remote, chain_path=chain_path,
+            chain_params=params, headers=parse_headers(list(header_lines), cookie),
         ))
         print_summary(findings)
 
@@ -657,6 +717,8 @@ else:  # ------------------------------------------------------------------
         scan.add_argument("--concurrency", type=int, default=20)
         scan.add_argument("--rps", type=float, default=25.0)
         scan.add_argument("--rule-format", choices=["yaml", "json"], default="yaml")
+        scan.add_argument("--header", dest="header_lines", action="append", default=[])
+        scan.add_argument("--cookie", default=None)
         scan.add_argument("-v", "--verbose", action="store_true")
 
         chain = sub.add_parser("chain", help="Run a stateful business-logic chain.")
@@ -669,6 +731,8 @@ else:  # ------------------------------------------------------------------
         chain.add_argument("--output", dest="output_dir", default="./sternuke-out")
         chain.add_argument("--concurrency", type=int, default=10)
         chain.add_argument("--rps", type=float, default=15.0)
+        chain.add_argument("--header", dest="header_lines", action="append", default=[])
+        chain.add_argument("--cookie", default=None)
         chain.add_argument("-v", "--verbose", action="store_true")
 
         intel = sub.add_parser("intel", help="Query local case-based memory.")
@@ -688,6 +752,8 @@ else:  # ------------------------------------------------------------------
         fz.add_argument("--concurrency", type=int, default=20)
         fz.add_argument("--rps", type=float, default=25.0)
         fz.add_argument("--allow-remote", dest="allow_remote", action="store_true")
+        fz.add_argument("--header", dest="header_lines", action="append", default=[])
+        fz.add_argument("--cookie", default=None)
         fz.add_argument("--binary", default=None)
         fz.add_argument("--input-mode", dest="input_mode", choices=["stdin", "file"],
                         default="stdin")
@@ -714,6 +780,11 @@ else:  # ------------------------------------------------------------------
         orch.add_argument("--concurrency", type=int, default=15)
         orch.add_argument("--rps", type=float, default=15.0)
         orch.add_argument("--allow-remote", dest="allow_remote", action="store_true")
+        orch.add_argument("--chain-path", dest="chain_path", default="/api/v1/cart/checkout")
+        orch.add_argument("--param", dest="chain_params", action="append", default=[],
+                          metavar="KEY=VALUE")
+        orch.add_argument("--header", dest="header_lines", action="append", default=[])
+        orch.add_argument("--cookie", default=None)
         orch.add_argument("-v", "--verbose", action="store_true")
 
         srv = sub.add_parser("serve", help="Run the browser dashboard on localhost.")
@@ -756,7 +827,10 @@ else:  # ------------------------------------------------------------------
                 assets=assets, modes=selected, output_dir=args.output_dir,
                 model=args.model, base_url=args.base_url, rpc_url=args.rpc_url,
                 concurrency=args.concurrency, rps=args.rps, verbose=args.verbose,
-                allow_remote=args.allow_remote,
+                allow_remote=args.allow_remote, chain_path=args.chain_path,
+                chain_params=(dict(x.split("=", 1) for x in args.chain_params if "=" in x)
+                              or None),
+                headers=parse_headers(args.header_lines, args.cookie),
             ))
             print_summary(findings)
             return 0
@@ -765,7 +839,9 @@ else:  # ------------------------------------------------------------------
                 mode=args.mode, output_dir=args.output_dir, verbose=args.verbose,
                 target=args.target, method=args.method, body=args.body,
                 payloads_per_param=args.payloads_per_param, concurrency=args.concurrency,
-                rps=args.rps, allow_remote=args.allow_remote, binary=args.binary,
+                rps=args.rps, allow_remote=args.allow_remote,
+                headers=parse_headers(args.header_lines, args.cookie),
+                binary=args.binary,
                 input_mode=args.input_mode, prog_args=args.prog_args,
                 max_execs=args.max_execs, seconds=args.seconds, seed_dir=args.seed_dir,
                 rpc=args.rpc, address=args.address, signatures=args.signatures,
@@ -780,6 +856,7 @@ else:  # ------------------------------------------------------------------
                 target=args.target, path=args.path, params=parsed,
                 output_dir=args.output_dir, model=args.model, base_url=args.base_url,
                 concurrency=args.concurrency, rps=args.rps, verbose=args.verbose,
+                headers=parse_headers(args.header_lines, args.cookie),
             ))
             print_summary(findings)
             return 0
@@ -788,6 +865,7 @@ else:  # ------------------------------------------------------------------
             output_dir=args.output_dir, use_ai=args.use_ai, model=args.model,
             base_url=args.base_url, concurrency=args.concurrency, rps=args.rps,
             verbose=args.verbose, rule_format=args.rule_format,
+            headers=parse_headers(args.header_lines, args.cookie),
         ))
         print_summary(findings)
         return 0

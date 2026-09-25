@@ -421,8 +421,11 @@ class StatefulChainEngine:
     async def run_chain(self, base: str, steps: Sequence[InteractionStep],
                         client: AsyncHttpClient, *, name: str = "chain",
                         seed_vars: Optional[Dict[str, str]] = None,
+                        extra_headers: Optional[Dict[str, str]] = None,
                         memory=None) -> ChainResult:
-        state = SessionState(variables=dict(seed_vars or {}))
+        # Session headers (e.g. an authenticated cookie) applied to every step.
+        state = SessionState(variables=dict(seed_vars or {}),
+                             headers=dict(extra_headers or {}))
         graph = DependencyGraph(steps, seed_vars=list((seed_vars or {}).keys()))
         ordered = graph.topological_order()
         result = ChainResult(name=name)

@@ -38,6 +38,23 @@ from .engine import Finding
 from .assets import AssetParser
 
 
+def _headers_from_text(text: str) -> dict:
+    """Parse a textarea of 'Name: value' lines into a headers dict."""
+    from .cli import parse_headers
+    return parse_headers([text]) if text else {}
+
+
+def _params_from_text(text: str):
+    """Parse 'key=value' lines into a params dict (or None if empty)."""
+    out: dict = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if "=" in line:
+            key, _, val = line.partition("=")
+            out[key.strip()] = val.strip()
+    return out or None
+
+
 # ---------------------------------------------------------------------------
 # Job management
 # ---------------------------------------------------------------------------
@@ -146,6 +163,8 @@ th{color:var(--muted);font-weight:600}
      <select id="s-mode"><option value="web">web</option><option value="blockchain">blockchain</option></select></div>
     <div><label>Model</label><input id="s-model" value="deepseek-coder"></div></div>
    <div class="checks"><label><input type="checkbox" id="s-ai"> Use local AI agent</label></div>
+   <label>Cookie / headers (one per line, for authenticated scans)</label>
+   <textarea id="s-headers" placeholder="Cookie: PHPSESSID=abc123; security=low"></textarea>
    <button id="btn-scan">Start scan</button>
   </div>
 
@@ -161,6 +180,12 @@ th{color:var(--muted);font-weight:600}
      <label><input type="checkbox" id="o-remote"> Allow non-local targets (I am authorised)</label>
    </div>
    <label>RPC (local node, for ABI fuzzing)</label><input id="o-rpc" value="http://127.0.0.1:8545">
+   <label>Chain endpoint path (Web Stateful Chain)</label>
+   <input id="o-chainpath" value="/api/v1/cart/checkout">
+   <label>Chain params (key=value per line)</label>
+   <textarea id="o-chainparams" placeholder="quantity=1&#10;item_id=9"></textarea>
+   <label>Cookie / headers (one per line)</label>
+   <textarea id="o-headers" placeholder="Cookie: PHPSESSID=abc123; security=low"></textarea>
    <button id="btn-orch">Run orchestration</button>
   </div>
   <div class="note">Assessment tool - authorised targets only. Server bound to localhost.</div>
@@ -203,7 +228,7 @@ async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'C
   body:JSON.stringify(body)});return r.json();}
 $('#btn-scan').onclick=async()=>{clearOut();setBusy(true);stream();
   const r=await post('/api/scan',{target:$('#s-target').value,mode:$('#s-mode').value,
-   model:$('#s-model').value,use_ai:$('#s-ai').checked});
+   model:$('#s-model').value,use_ai:$('#s-ai').checked,headers:$('#s-headers').value});
   if(r.error){addLog('[error] '+r.error);setBusy(false);}};
 $('#btn-parse').onclick=async()=>{const r=await post('/api/parse',{targets:$('#o-targets').value});
   $('#o-summary').textContent=r.count+' asset(s): '+JSON.stringify(r.summary);};
@@ -211,7 +236,9 @@ $('#btn-orch').onclick=async()=>{clearOut();setBusy(true);stream();
   const modes=[];if($('#m-web').checked)modes.push('web_chain');
   if($('#m-abi').checked)modes.push('abi_fuzz');if($('#m-ai').checked)modes.push('ai_templates');
   const r=await post('/api/orchestrate',{targets:$('#o-targets').value,modes,
-   rpc_url:$('#o-rpc').value,allow_remote:$('#o-remote').checked});
+   rpc_url:$('#o-rpc').value,allow_remote:$('#o-remote').checked,
+   chain_path:$('#o-chainpath').value,chain_params:$('#o-chainparams').value,
+   headers:$('#o-headers').value});
   if(r.error){addLog('[error] '+r.error);setBusy(false);}};
 </script></body></html>"""
 
@@ -263,13 +290,16 @@ class WebDashboard:
         if not target:
             return web.json_response({"error": "target is required"}, status=400)
 
+        headers = _headers_from_text(data.get("headers", ""))
+
         def factory(log_sink):
             return run_assessment(
                 target=target, mode=data.get("mode", "web"),
                 rules_path=os.path.join(os.path.dirname(__file__), "rules"),
                 output_dir=self.output_dir, use_ai=bool(data.get("use_ai")),
                 model=data.get("model", self.model), base_url=self.base_url,
-                concurrency=15, rps=20.0, verbose=True, log_sink=log_sink)
+                concurrency=15, rps=20.0, verbose=True, headers=headers,
+                log_sink=log_sink)
 
         self.jobs.start("scan", factory)
         return web.json_response({"status": "started"})
@@ -283,6 +313,9 @@ class WebDashboard:
         if not assets:
             return web.json_response({"error": "no valid targets parsed"}, status=400)
         modes = data.get("modes") or ["web_chain", "ai_templates"]
+        headers = _headers_from_text(data.get("headers", ""))
+        chain_params = _params_from_text(data.get("chain_params", ""))
+        chain_path = data.get("chain_path") or "/api/v1/cart/checkout"
 
         def factory(log_sink):
             return run_orchestration(
@@ -290,7 +323,9 @@ class WebDashboard:
                 model=self.model, base_url=self.base_url,
                 rpc_url=data.get("rpc_url", "http://127.0.0.1:8545"),
                 concurrency=15, rps=15.0, verbose=True,
-                allow_remote=bool(data.get("allow_remote")), log_sink=log_sink)
+                allow_remote=bool(data.get("allow_remote")),
+                chain_path=chain_path, chain_params=chain_params, headers=headers,
+                log_sink=log_sink)
 
         self.jobs.start("orchestrate", factory)
         return web.json_response({"status": "started", "assets": len(assets)})
