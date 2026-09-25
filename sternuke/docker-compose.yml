@@ -1,0 +1,75 @@
+# sternuke — dashboard + local Ollama, AI features working out of the box.
+#
+#   docker compose up --build          # first run also pulls the model
+#   open http://127.0.0.1:8787
+#
+# Everything stays local: the dashboard talks to the Ollama service over the
+# private compose network; nothing leaves your machine. Override the model with
+# STERNUKE_MODEL (e.g. `STERNUKE_MODEL=llama3 docker compose up`).
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sternuke-ollama
+    # Not published to the host by default (kept on the internal network only).
+    # Uncomment to reach Ollama directly from the host:
+    # ports:
+    #   - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    # --- Optional GPU acceleration (NVIDIA); requires nvidia-container-toolkit ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot: waits for Ollama, pulls the model, then exits.
+  model-init:
+    image: ollama/ollama:latest
+    container_name: sternuke-model-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'ollama pull "${STERNUKE_MODEL:-deepseek-coder}" && echo "model ready: ${STERNUKE_MODEL:-deepseek-coder}"'
+    restart: "no"
+
+  sternuke:
+    build: .
+    image: sternuke:local
+    container_name: sternuke-dashboard
+    depends_on:
+      ollama:
+        condition: service_healthy
+      model-init:
+        condition: service_completed_successfully
+    command:
+      - "serve"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8787"
+      - "--model"
+      - "${STERNUKE_MODEL:-deepseek-coder}"
+      - "--base-url"
+      - "http://ollama:11434/v1"
+    ports:
+      - "127.0.0.1:8787:8787"   # dashboard reachable only from localhost
+    volumes:
+      - ./sternuke-out:/app/sternuke-out
+    restart: unless-stopped
+
+volumes:
+  ollama-models:

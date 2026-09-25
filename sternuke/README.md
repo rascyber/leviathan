@@ -251,3 +251,16 @@ docker run --rm -p 8787:8787 ghcr.io/rascyber/sternuke:2.1.0
 
 Copy `.env.example` to `.env` and set `GITHUB_TOKEN` (scopes: `repo`,
 `write:packages`, `read:packages`). `.env` is gitignored; never commit it.
+
+## Run with Docker Compose (dashboard + local Ollama)
+
+`docker-compose.yml` runs the dashboard alongside a local Ollama so the AI
+features work out of the box (all local; Ollama stays on the internal network):
+
+```bash
+docker compose up --build     # first run pulls the model (deepseek-coder)
+# open http://127.0.0.1:8787
+```
+
+Override the model with `STERNUKE_MODEL=llama3 docker compose up`. The dashboard
+is published to `127.0.0.1:8787` only and is unauthenticated — don't expose it.
