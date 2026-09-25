@@ -55,6 +55,17 @@ def _params_from_text(text: str):
     return out or None
 
 
+def _auth_from(data: dict):
+    """Build a form-login auth spec from request fields (or None)."""
+    from .cli import build_auth
+    return build_auth(
+        (data.get("login_url") or "").strip() or None,
+        (data.get("username") or "").strip() or None,
+        data.get("password", ""),
+        security=(data.get("security") or "").strip() or None,
+        submit="Login=Login")
+
+
 # ---------------------------------------------------------------------------
 # Job management
 # ---------------------------------------------------------------------------
@@ -163,8 +174,13 @@ th{color:var(--muted);font-weight:600}
      <select id="s-mode"><option value="web">web</option><option value="blockchain">blockchain</option></select></div>
     <div><label>Model</label><input id="s-model" value="deepseek-coder"></div></div>
    <div class="checks"><label><input type="checkbox" id="s-ai"> Use local AI agent</label></div>
-   <label>Cookie / headers (one per line, for authenticated scans)</label>
+   <label>Cookie / headers (one per line) — or use the login below</label>
    <textarea id="s-headers" placeholder="Cookie: PHPSESSID=abc123; security=low"></textarea>
+   <label>Authenticated login (optional)</label>
+   <input id="s-loginurl" placeholder="Login URL, e.g. http://127.0.0.1:4280/login.php">
+   <div class="row"><input id="s-user" placeholder="Username">
+     <input id="s-pass" type="password" placeholder="Password"></div>
+   <input id="s-security" placeholder="App cookie value (e.g. DVWA: low) — optional">
    <button id="btn-scan">Start scan</button>
   </div>
 
@@ -186,6 +202,11 @@ th{color:var(--muted);font-weight:600}
    <textarea id="o-chainparams" placeholder="quantity=1&#10;item_id=9"></textarea>
    <label>Cookie / headers (one per line)</label>
    <textarea id="o-headers" placeholder="Cookie: PHPSESSID=abc123; security=low"></textarea>
+   <label>Authenticated login (optional)</label>
+   <input id="o-loginurl" placeholder="Login URL, e.g. http://127.0.0.1:4280/login.php">
+   <div class="row"><input id="o-user" placeholder="Username">
+     <input id="o-pass" type="password" placeholder="Password"></div>
+   <input id="o-security" placeholder="App cookie value (e.g. DVWA: low) — optional">
    <button id="btn-orch">Run orchestration</button>
   </div>
   <div class="note">Assessment tool - authorised targets only. Server bound to localhost.</div>
@@ -228,7 +249,9 @@ async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'C
   body:JSON.stringify(body)});return r.json();}
 $('#btn-scan').onclick=async()=>{clearOut();setBusy(true);stream();
   const r=await post('/api/scan',{target:$('#s-target').value,mode:$('#s-mode').value,
-   model:$('#s-model').value,use_ai:$('#s-ai').checked,headers:$('#s-headers').value});
+   model:$('#s-model').value,use_ai:$('#s-ai').checked,headers:$('#s-headers').value,
+   login_url:$('#s-loginurl').value,username:$('#s-user').value,
+   password:$('#s-pass').value,security:$('#s-security').value});
   if(r.error){addLog('[error] '+r.error);setBusy(false);}};
 $('#btn-parse').onclick=async()=>{const r=await post('/api/parse',{targets:$('#o-targets').value});
   $('#o-summary').textContent=r.count+' asset(s): '+JSON.stringify(r.summary);};
@@ -238,7 +261,8 @@ $('#btn-orch').onclick=async()=>{clearOut();setBusy(true);stream();
   const r=await post('/api/orchestrate',{targets:$('#o-targets').value,modes,
    rpc_url:$('#o-rpc').value,allow_remote:$('#o-remote').checked,
    chain_path:$('#o-chainpath').value,chain_params:$('#o-chainparams').value,
-   headers:$('#o-headers').value});
+   headers:$('#o-headers').value,login_url:$('#o-loginurl').value,
+   username:$('#o-user').value,password:$('#o-pass').value,security:$('#o-security').value});
   if(r.error){addLog('[error] '+r.error);setBusy(false);}};
 </script></body></html>"""
 
@@ -291,6 +315,7 @@ class WebDashboard:
             return web.json_response({"error": "target is required"}, status=400)
 
         headers = _headers_from_text(data.get("headers", ""))
+        auth = _auth_from(data)
 
         def factory(log_sink):
             return run_assessment(
@@ -298,7 +323,7 @@ class WebDashboard:
                 rules_path=os.path.join(os.path.dirname(__file__), "rules"),
                 output_dir=self.output_dir, use_ai=bool(data.get("use_ai")),
                 model=data.get("model", self.model), base_url=self.base_url,
-                concurrency=15, rps=20.0, verbose=True, headers=headers,
+                concurrency=15, rps=20.0, verbose=True, headers=headers, auth=auth,
                 log_sink=log_sink)
 
         self.jobs.start("scan", factory)
@@ -316,6 +341,7 @@ class WebDashboard:
         headers = _headers_from_text(data.get("headers", ""))
         chain_params = _params_from_text(data.get("chain_params", ""))
         chain_path = data.get("chain_path") or "/api/v1/cart/checkout"
+        auth = _auth_from(data)
 
         def factory(log_sink):
             return run_orchestration(
@@ -325,7 +351,7 @@ class WebDashboard:
                 concurrency=15, rps=15.0, verbose=True,
                 allow_remote=bool(data.get("allow_remote")),
                 chain_path=chain_path, chain_params=chain_params, headers=headers,
-                log_sink=log_sink)
+                auth=auth, log_sink=log_sink)
 
         self.jobs.start("orchestrate", factory)
         return web.json_response({"status": "started", "assets": len(assets)})

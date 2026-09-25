@@ -81,6 +81,55 @@ def parse_headers(items: Optional[List[str]] = None,
     return headers
 
 
+def build_auth(login_url: Optional[str], username: Optional[str], password: str = "",
+               *, security: Optional[str] = None, submit: Optional[str] = None,
+               username_field: str = "username", password_field: str = "password",
+               csrf_field: Optional[str] = None) -> Optional[dict]:
+    """Assemble an auth spec dict, or None when no login is requested."""
+    if not (login_url and username):
+        return None
+    auth: dict = {
+        "login_url": login_url, "username": username, "password": password or "",
+        "username_field": username_field, "password_field": password_field,
+        "csrf_field": csrf_field,
+    }
+    if security:
+        auth["security"] = security
+    if submit and "=" in submit:
+        field_name, _, value = submit.partition("=")
+        auth["submit_field"], auth["submit_value"] = field_name.strip(), value.strip()
+    return auth
+
+
+async def _login_headers(auth: dict, log: Callable[[str], None]) -> dict:
+    """Perform a form login from an ``auth`` spec and return a Cookie header."""
+    from .auth import FormAuthenticator, LoginConfig
+    cfg = LoginConfig(
+        login_url=auth["login_url"], username=auth["username"],
+        password=auth.get("password", ""),
+        username_field=auth.get("username_field", "username"),
+        password_field=auth.get("password_field", "password"),
+        csrf_field=auth.get("csrf_field"),
+        extra_cookies=({"security": auth["security"]} if auth.get("security") else {}),
+    )
+    if "submit_field" in auth:
+        cfg.submit_field = auth["submit_field"]
+        cfg.submit_value = auth.get("submit_value", "")
+    return await FormAuthenticator(logger=log).authenticate(cfg)
+
+
+async def _apply_auth(headers: Optional[dict], auth: Optional[dict],
+                      log: Callable[[str], None]) -> dict:
+    """Merge a form-login Cookie into ``headers`` when ``auth`` is provided."""
+    merged = dict(headers or {})
+    if auth and auth.get("login_url") and auth.get("username"):
+        try:
+            merged.update(await _login_headers(auth, log))
+        except Exception as exc:  # noqa: BLE001 - surface but don't abort the scan
+            log(f"[auth] login failed: {exc}")
+    return merged
+
+
 def _prepare_output_dir(output_dir: str, log: Callable[[str], None]) -> str:
     """Ensure ``output_dir`` exists and is writable; fall back to a temp dir.
 
@@ -123,6 +172,7 @@ async def run_assessment(
     verbose: bool,
     rule_format: str = "yaml",
     headers: Optional[dict] = None,
+    auth: Optional[dict] = None,
     log_sink: Optional[Callable[[str], None]] = None,
 ) -> List[Finding]:
     """Run a full assessment and return the findings list.
@@ -130,9 +180,12 @@ async def run_assessment(
     This is the single seam the CLI, GUI and :mod:`sternuke.main` all call.
     ``log_sink``, when provided, receives every log line (used by the web UI).
     ``headers`` (e.g. an authenticated session cookie) are sent on every request.
+    ``auth`` (login_url + username + password) performs a form login first and
+    applies the resulting session cookie.
     """
     log = log_sink or _console_logger(verbose)
     output_dir = _prepare_output_dir(output_dir, log)
+    headers = await _apply_auth(headers, auth, log)
     policy = ScanPolicy(max_concurrency=concurrency, requests_per_second=rps)
     rule_engine = RuleEngine(logger=log)
     model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
@@ -268,6 +321,7 @@ async def run_fuzz(
     rps: float = 25.0,
     allow_remote: bool = False,
     headers: Optional[dict] = None,
+    auth: Optional[dict] = None,
     # binary
     binary: Optional[str] = None,
     input_mode: str = "stdin",
@@ -296,6 +350,7 @@ async def run_fuzz(
         from .fuzzing import WebFuzzer, WebFuzzBudget
         if not target:
             raise ValueError("web fuzzing requires --target")
+        headers = await _apply_auth(headers, auth, log)
         fuzzer = WebFuzzer(
             ScanPolicy(max_concurrency=concurrency, requests_per_second=rps),
             budget=WebFuzzBudget(payloads_per_param=payloads_per_param),
@@ -352,6 +407,7 @@ async def run_orchestration(
     chain_path: str = "/api/v1/cart/checkout",
     chain_params: Optional[dict] = None,
     headers: Optional[dict] = None,
+    auth: Optional[dict] = None,
     log_sink: Optional[Callable[[str], None]] = None,
 ) -> List[Finding]:
     """Run selected modes across a list of parsed assets and write advisories.
@@ -378,6 +434,7 @@ async def run_orchestration(
     model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
     memory = build_default_memory(os.path.join(output_dir, "memory.json"), logger=log)
     intel = IntelligenceEngine(model_client if "ai_templates" in modes else None, logger=log)
+    headers = await _apply_auth(headers, auth, log)
     findings: List[Finding] = []
 
     web_assets = [a for a in assets if a.type in (
@@ -528,15 +585,25 @@ if click is not None:
                   help="Extra request header (repeatable), e.g. --header 'Cookie: PHPSESSID=..'.")
     @click.option("--cookie", default=None,
                   help="Session cookie string, e.g. 'PHPSESSID=abc; security=low'.")
+    @click.option("--login-url", default=None,
+                  help="Form login URL for authenticated scans (e.g. .../login.php).")
+    @click.option("--username", default=None, help="Login username.")
+    @click.option("--password", default="", help="Login password.")
+    @click.option("--security", default=None,
+                  help="Optional app cookie value, e.g. DVWA --security low.")
+    @click.option("--submit", default="Login=Login", show_default=True,
+                  help="Submit field=value posted with the login form.")
     @click.option("-v", "--verbose", is_flag=True, default=False)
     def scan_cmd(target, mode, model, base_url, rules_path, output_dir, ai,
-                 concurrency, rps, rule_format, header_lines, cookie, verbose):
+                 concurrency, rps, rule_format, header_lines, cookie, login_url,
+                 username, password, security, submit, verbose):
         """Run an assessment against a single target."""
         findings = asyncio.run(run_assessment(
             target=target, mode=mode, rules_path=rules_path, output_dir=output_dir,
             use_ai=ai, model=model, base_url=base_url, concurrency=concurrency,
             rps=rps, verbose=verbose, rule_format=rule_format,
             headers=parse_headers(list(header_lines), cookie),
+            auth=build_auth(login_url, username, password, security=security, submit=submit),
         ))
         print_summary(findings)
 
@@ -591,6 +658,11 @@ if click is not None:
     @click.option("--header", "header_lines", multiple=True, metavar="'Name: value'",
                   help="[web] extra request header (repeatable).")
     @click.option("--cookie", default=None, help="[web] session cookie string.")
+    @click.option("--login-url", default=None, help="[web] form login URL.")
+    @click.option("--username", default=None, help="[web] login username.")
+    @click.option("--password", default="", help="[web] login password.")
+    @click.option("--security", default=None, help="[web] app cookie value (e.g. DVWA low).")
+    @click.option("--submit", default="Login=Login", help="[web] submit field=value.")
     # binary
     @click.option("--binary", default=None, help="[binary] local executable to fuzz.")
     @click.option("--input-mode", type=click.Choice(["stdin", "file"]), default="stdin")
@@ -608,7 +680,8 @@ if click is not None:
     @click.option("--sender", default=None, help="[contract] sender address.")
     @click.option("--max-calls", default=400, show_default=True)
     def fuzz_cmd(mode, output_dir, verbose, target, method, body, payloads_per_param,
-                 concurrency, rps, allow_remote, header_lines, cookie, binary,
+                 concurrency, rps, allow_remote, header_lines, cookie, login_url,
+                 username, password, security, submit, binary,
                  input_mode, prog_args, max_execs, seconds, seed_dir, rpc, address,
                  signatures, abi_path, sender, max_calls):
         """Run the payload-mutation fuzzer (web | binary | contract)."""
@@ -617,6 +690,7 @@ if click is not None:
             method=method, body=body, payloads_per_param=payloads_per_param,
             concurrency=concurrency, rps=rps, allow_remote=allow_remote,
             headers=parse_headers(list(header_lines), cookie),
+            auth=build_auth(login_url, username, password, security=security, submit=submit),
             binary=binary, input_mode=input_mode, prog_args=list(prog_args),
             max_execs=max_execs, seconds=seconds, seed_dir=seed_dir, rpc=rpc,
             address=address, signatures=list(signatures), abi_path=abi_path,
@@ -647,10 +721,16 @@ if click is not None:
     @click.option("--header", "header_lines", multiple=True, metavar="'Name: value'",
                   help="Extra request header (repeatable).")
     @click.option("--cookie", default=None, help="Session cookie string.")
+    @click.option("--login-url", default=None, help="Form login URL for authenticated runs.")
+    @click.option("--username", default=None, help="Login username.")
+    @click.option("--password", default="", help="Login password.")
+    @click.option("--security", default=None, help="App cookie value (e.g. DVWA low).")
+    @click.option("--submit", default="Login=Login", help="Submit field=value.")
     @click.option("-v", "--verbose", is_flag=True, default=False)
     def orchestrate_cmd(scope_file, targets, modes, model, base_url, rpc_url,
                         output_dir, concurrency, rps, allow_remote, chain_path,
-                        chain_params, header_lines, cookie, verbose):
+                        chain_params, header_lines, cookie, login_url, username,
+                        password, security, submit, verbose):
         """Ingest a scope file/targets and run selected modes across all assets."""
         from .assets import AssetParser
         parser = AssetParser()
@@ -668,6 +748,7 @@ if click is not None:
             base_url=base_url, rpc_url=rpc_url, concurrency=concurrency, rps=rps,
             verbose=verbose, allow_remote=allow_remote, chain_path=chain_path,
             chain_params=params, headers=parse_headers(list(header_lines), cookie),
+            auth=build_auth(login_url, username, password, security=security, submit=submit),
         ))
         print_summary(findings)
 
@@ -719,6 +800,11 @@ else:  # ------------------------------------------------------------------
         scan.add_argument("--rule-format", choices=["yaml", "json"], default="yaml")
         scan.add_argument("--header", dest="header_lines", action="append", default=[])
         scan.add_argument("--cookie", default=None)
+        scan.add_argument("--login-url", dest="login_url", default=None)
+        scan.add_argument("--username", default=None)
+        scan.add_argument("--password", default="")
+        scan.add_argument("--security", default=None)
+        scan.add_argument("--submit", default="Login=Login")
         scan.add_argument("-v", "--verbose", action="store_true")
 
         chain = sub.add_parser("chain", help="Run a stateful business-logic chain.")
@@ -754,6 +840,11 @@ else:  # ------------------------------------------------------------------
         fz.add_argument("--allow-remote", dest="allow_remote", action="store_true")
         fz.add_argument("--header", dest="header_lines", action="append", default=[])
         fz.add_argument("--cookie", default=None)
+        fz.add_argument("--login-url", dest="login_url", default=None)
+        fz.add_argument("--username", default=None)
+        fz.add_argument("--password", default="")
+        fz.add_argument("--security", default=None)
+        fz.add_argument("--submit", default="Login=Login")
         fz.add_argument("--binary", default=None)
         fz.add_argument("--input-mode", dest="input_mode", choices=["stdin", "file"],
                         default="stdin")
@@ -785,6 +876,11 @@ else:  # ------------------------------------------------------------------
                           metavar="KEY=VALUE")
         orch.add_argument("--header", dest="header_lines", action="append", default=[])
         orch.add_argument("--cookie", default=None)
+        orch.add_argument("--login-url", dest="login_url", default=None)
+        orch.add_argument("--username", default=None)
+        orch.add_argument("--password", default="")
+        orch.add_argument("--security", default=None)
+        orch.add_argument("--submit", default="Login=Login")
         orch.add_argument("-v", "--verbose", action="store_true")
 
         srv = sub.add_parser("serve", help="Run the browser dashboard on localhost.")
@@ -831,6 +927,8 @@ else:  # ------------------------------------------------------------------
                 chain_params=(dict(x.split("=", 1) for x in args.chain_params if "=" in x)
                               or None),
                 headers=parse_headers(args.header_lines, args.cookie),
+                auth=build_auth(args.login_url, args.username, args.password,
+                                security=args.security, submit=args.submit),
             ))
             print_summary(findings)
             return 0
@@ -841,6 +939,8 @@ else:  # ------------------------------------------------------------------
                 payloads_per_param=args.payloads_per_param, concurrency=args.concurrency,
                 rps=args.rps, allow_remote=args.allow_remote,
                 headers=parse_headers(args.header_lines, args.cookie),
+                auth=build_auth(args.login_url, args.username, args.password,
+                                security=args.security, submit=args.submit),
                 binary=args.binary,
                 input_mode=args.input_mode, prog_args=args.prog_args,
                 max_execs=args.max_execs, seconds=args.seconds, seed_dir=args.seed_dir,
@@ -866,6 +966,8 @@ else:  # ------------------------------------------------------------------
             base_url=args.base_url, concurrency=args.concurrency, rps=args.rps,
             verbose=args.verbose, rule_format=args.rule_format,
             headers=parse_headers(args.header_lines, args.cookie),
+            auth=build_auth(args.login_url, args.username, args.password,
+                            security=args.security, submit=args.submit),
         ))
         print_summary(findings)
         return 0
