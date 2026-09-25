@@ -68,8 +68,9 @@ services:
     ports:
       - "127.0.0.1:8787:8787"   # dashboard reachable only from localhost
     volumes:
-      - ./sternuke-out:/app/sternuke-out
+      - sternuke-out:/app/sternuke-out
     restart: unless-stopped
 
 volumes:
   ollama-models:
+  sternuke-out:

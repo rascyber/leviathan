@@ -61,7 +61,7 @@ from .intelligence import (
 from .assets import Asset, AssetParser, AssetType
 from .webgui import WebDashboard, serve as serve_dashboard
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 __all__ = [
     # engine

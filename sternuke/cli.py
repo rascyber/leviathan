@@ -58,6 +58,34 @@ def _console_logger(verbose: bool):
     return log
 
 
+def _prepare_output_dir(output_dir: str, log: Callable[[str], None]) -> str:
+    """Ensure ``output_dir`` exists and is writable; fall back to a temp dir.
+
+    In locked-down environments (e.g. a container whose working directory is
+    owned by root while the process runs as a non-root user) the default
+    ``./sternuke-out`` cannot be created. Rather than crash the scan, fall back
+    to a writable directory under the system temp path and log where output goes.
+    """
+    import tempfile
+    candidates = [output_dir, os.path.join(tempfile.gettempdir(), "sternuke-out")]
+    for i, candidate in enumerate(candidates):
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            probe = os.path.join(candidate, ".sternuke-write-test")
+            with open(probe, "w", encoding="utf-8") as fh:
+                fh.write("")
+            os.remove(probe)
+            if i > 0:
+                log(f"[warn] output dir {output_dir!r} is not writable; "
+                    f"writing results to {candidate!r} instead")
+            return candidate
+        except OSError as exc:
+            if i == len(candidates) - 1:
+                raise OSError(
+                    f"no writable output directory (tried {candidates}): {exc}") from exc
+    return output_dir  # unreachable
+
+
 async def run_assessment(
     *,
     target: str,
@@ -79,7 +107,7 @@ async def run_assessment(
     ``log_sink``, when provided, receives every log line (used by the web UI).
     """
     log = log_sink or _console_logger(verbose)
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = _prepare_output_dir(output_dir, log)
     policy = ScanPolicy(max_concurrency=concurrency, requests_per_second=rps)
     rule_engine = RuleEngine(logger=log)
     model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
@@ -178,7 +206,7 @@ async def run_business_logic_chain(
     from .cognitive import BusinessLogicMutator
 
     log = _console_logger(verbose)
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = _prepare_output_dir(output_dir, log)
     policy = ScanPolicy(max_concurrency=concurrency, requests_per_second=rps)
     model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
     memory = build_default_memory(os.path.join(output_dir, "memory.json"), logger=log)
@@ -231,7 +259,7 @@ async def run_fuzz(
     local binaries. Intended for assessment of systems you control.
     """
     log = _console_logger(verbose)
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = _prepare_output_dir(output_dir, log)
     findings: List[Finding] = []
 
     if mode == "web":
@@ -308,7 +336,7 @@ async def run_orchestration(
     from .intelligence import IntelligenceEngine, AnomalyContext
 
     log = log_sink or _console_logger(verbose)
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = _prepare_output_dir(output_dir, log)
     policy = ScanPolicy(max_concurrency=concurrency, requests_per_second=rps)
     model_client = LocalModelClient(ModelConfig(base_url=base_url, model=model), logger=log)
     memory = build_default_memory(os.path.join(output_dir, "memory.json"), logger=log)
