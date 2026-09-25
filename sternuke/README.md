@@ -229,3 +229,25 @@ Each scan writes to the `--output` directory:
 * `findings.json` — all findings (severity, name, location, evidence).
 * `blueprint.json` — the architectural model (blockchain mode).
 * `*-synth-*.yaml|json` — AI-synthesised rule files.
+
+
+## Install (private distribution)
+
+sternuke is distributed **privately** (dual-use security tooling) — not published
+to PyPI or any public index. Install from a private GitHub Release or pull the
+private container image. The only credential is a GitHub token (see `.env.example`).
+
+```bash
+# from a private release wheel (auth with gh first)
+gh release download v2.1.0 -R rascyber/sternuke --pattern '*.whl'
+pip install ./sternuke-2.1.0-py3-none-any.whl
+
+# or from the private repo at a tag
+pip install "git+https://github.com/rascyber/sternuke@v2.1.0"
+
+# or run the container (dashboard on :8787)
+docker run --rm -p 8787:8787 ghcr.io/rascyber/sternuke:2.1.0
+```
+
+Copy `.env.example` to `.env` and set `GITHUB_TOKEN` (scopes: `repo`,
+`write:packages`, `read:packages`). `.env` is gitignored; never commit it.
