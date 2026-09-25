@@ -59,8 +59,9 @@ from .intelligence import (
     IntelligenceEngine, NucleiTemplateWriter, SeverityMapper,
 )
 from .assets import Asset, AssetParser, AssetType
+from .webgui import WebDashboard, serve as serve_dashboard
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 __all__ = [
     # engine
@@ -94,5 +95,7 @@ __all__ = [
     "SeverityMapper",
     # assets
     "Asset", "AssetParser", "AssetType",
+    # web dashboard
+    "WebDashboard", "serve_dashboard",
     "__version__",
 ]

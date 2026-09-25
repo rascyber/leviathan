@@ -71,12 +71,14 @@ async def run_assessment(
     rps: float,
     verbose: bool,
     rule_format: str = "yaml",
+    log_sink: Optional[Callable[[str], None]] = None,
 ) -> List[Finding]:
     """Run a full assessment and return the findings list.
 
     This is the single seam the CLI, GUI and :mod:`sternuke.main` all call.
+    ``log_sink``, when provided, receives every log line (used by the web UI).
     """
-    log = _console_logger(verbose)
+    log = log_sink or _console_logger(verbose)
     os.makedirs(output_dir, exist_ok=True)
     policy = ScanPolicy(max_concurrency=concurrency, requests_per_second=rps)
     rule_engine = RuleEngine(logger=log)
@@ -583,9 +585,21 @@ if click is not None:
 
     @cli.command("gui")
     def gui_cmd():
-        """Launch the graphical interface."""
+        """Launch the native desktop interface (requires Tk)."""
         from .gui import launch_gui
         launch_gui()
+
+    @cli.command("serve")
+    @click.option("--host", default="127.0.0.1", show_default=True,
+                  help="Bind address (loopback by default).")
+    @click.option("--port", default=8787, show_default=True)
+    @click.option("--model", default="deepseek-coder", show_default=True)
+    @click.option("--base-url", default="http://localhost:11434/v1", show_default=True)
+    @click.option("--output", "output_dir", default="./sternuke-out", show_default=True)
+    def serve_cmd(host, port, model, base_url, output_dir):
+        """Run the browser dashboard on localhost (http://127.0.0.1:8787)."""
+        from .webgui import serve
+        serve(host=host, port=port, output_dir=output_dir, model=model, base_url=base_url)
 
     def main(argv: Optional[List[str]] = None) -> int:
         try:
@@ -674,7 +688,14 @@ else:  # ------------------------------------------------------------------
         orch.add_argument("--allow-remote", dest="allow_remote", action="store_true")
         orch.add_argument("-v", "--verbose", action="store_true")
 
-        sub.add_parser("gui", help="Launch the graphical interface.")
+        srv = sub.add_parser("serve", help="Run the browser dashboard on localhost.")
+        srv.add_argument("--host", default="127.0.0.1")
+        srv.add_argument("--port", type=int, default=8787)
+        srv.add_argument("--model", default="deepseek-coder")
+        srv.add_argument("--base-url", dest="base_url", default="http://localhost:11434/v1")
+        srv.add_argument("--output", dest="output_dir", default="./sternuke-out")
+
+        sub.add_parser("gui", help="Launch the native desktop interface.")
         return parser
 
     def main(argv: Optional[List[str]] = None) -> int:
@@ -683,6 +704,11 @@ else:  # ------------------------------------------------------------------
         if args.command == "gui":
             from .gui import launch_gui
             launch_gui()
+            return 0
+        if args.command == "serve":
+            from .webgui import serve
+            serve(host=args.host, port=args.port, output_dir=args.output_dir,
+                  model=args.model, base_url=args.base_url)
             return 0
         if args.command == "intel":
             run_intel_query(args.query, args.output_dir, args.domain, args.top_k)

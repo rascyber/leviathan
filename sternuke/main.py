@@ -12,6 +12,7 @@ Behaviour
 * ``python -m sternuke.main gui`` launches the GUI explicitly.
 * ``python -m sternuke.main scan ...`` runs a single-target assessment.
 * ``python -m sternuke.main orchestrate ...`` runs the multi-asset loop.
+* ``python -m sternuke.main serve`` runs the browser dashboard on localhost.
 * ``python -m sternuke.main fuzz|chain|intel ...`` runs the respective module.
 * ``python -m sternuke.main --help`` shows CLI usage.
 
